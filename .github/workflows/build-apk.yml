@@ -5,7 +5,8 @@ on:
   push:
     branches: [main]
     paths:
-      - source/T-Car_source_ok.zip
+      - T-Car_source_ok.zip
+      - .github/workflows/build-apk.yml
 
 jobs:
   build:
@@ -15,13 +16,13 @@ jobs:
 
       - name: Verify source
         run: |
-          echo "6dceee3907a924923ae7521190ece51aecd3a2d2138f2e7abbc4168a02512891  source/T-Car_source_ok.zip" | sha256sum -c -
-          unzip -t source/T-Car_source_ok.zip
+          echo "6dceee3907a924923ae7521190ece51aecd3a2d2138f2e7abbc4168a02512891  T-Car_source_ok.zip" | sha256sum -c -
+          unzip -t T-Car_source_ok.zip
 
       - name: Extract source
         run: |
           mkdir -p /tmp/tcar
-          unzip -q source/T-Car_source_ok.zip -d /tmp/tcar
+          unzip -q T-Car_source_ok.zip -d /tmp/tcar
           test -f /tmp/tcar/settings.gradle.kts
           test -f /tmp/tcar/app/build.gradle.kts
           echo "TCAR_PROJECT=/tmp/tcar" >> "$GITHUB_ENV"
