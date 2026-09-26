@@ -2,20 +2,15 @@
 
 Android Auto YouTube/IPTV.
 
-## Bản nguồn dùng để build
+## Source đã test OK
 
-Workflow chỉ chấp nhận file đã test chạy ổn:
+GitHub Actions chỉ build gói source đã đối chiếu với bản chạy ổn:
 
-- Đường dẫn: `source/youtubepro_background_final.zip`
-- SHA-256: `824899f63343f1e2da6d84b491ec5b4fd6fb5087ffbfde9384c932a658b98f7f`
+- File: `source/T-Car_source_ok.zip`
+- SHA-256: `6dceee3907a924923ae7521190ece51aecd3a2d2138f2e7abbc4168a02512891`
 
-Nếu checksum không đúng, GitHub Actions sẽ dừng trước khi build.
+Gói này là source-only từ bản `youtubepro_background_final`: 116 file runtime/build đã được so sánh và không có khác biệt nội dung. Chỉ bỏ cache/build output/local.properties không cần cho CI.
 
-## Build APK
+## Lấy APK
 
-1. Upload `youtubepro_background_final.zip` vào thư mục `source/` và giữ đúng tên.
-2. Push/commit lên nhánh `main`.
-3. Workflow **Build T-Car APK** tự chạy.
-4. APK được xuất thành `T-Car.apk` trong **Actions > Artifacts** và đồng thời tạo **Release**.
-
-Source build giữ nguyên bản background-playback đã xác nhận chạy ổn; workflow không sửa logic YouTube/IPTV.
+Khi `source/T-Car_source_ok.zip` được commit lên `main`, workflow **Build T-Car APK** tự chạy. APK nằm trong **Actions > Artifacts > T-Car-APK**.
