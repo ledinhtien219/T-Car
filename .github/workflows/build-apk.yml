@@ -21,6 +21,7 @@ jobs:
 
       - name: Extract source
         run: |
+          rm -rf /tmp/tcar
           mkdir -p /tmp/tcar
           unzip -q T-Car_source_ok.zip -d /tmp/tcar
           test -f /tmp/tcar/settings.gradle.kts
@@ -32,10 +33,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -47,8 +56,9 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p built
-          find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" -exec cp {} built/T-Car.apk \;
-          test -f built/T-Car.apk
+          apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
+          test -n "$apk"
+          cp "$apk" built/T-Car.apk
           sha256sum built/T-Car.apk > built/T-Car.apk.sha256
 
       - uses: actions/upload-artifact@v4
