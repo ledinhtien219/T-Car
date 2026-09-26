@@ -6,40 +6,89 @@ on:
     branches:
       - main
     paths:
-      - source/READY
+      - source/youtubepro_background_final.zip
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f source/youtubepro_background_final.zip
+          echo "824899f63343f1e2da6d84b491ec5b4fd6fb5087ffbfde9384c932a658b98f7f  source/youtubepro_background_final.zip" | sha256sum -c -
+          unzip -t source/youtubepro_background_final.zip
+
+      - name: Restore project
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tcar-project
+          mkdir -p /tmp/tcar-project
+          unzip -q source/youtubepro_background_final.zip -d /tmp/tcar-project
+          test -f /tmp/tcar-project/youtubepro/settings.gradle.kts
+          test -f /tmp/tcar-project/youtubepro/app/build.gradle.kts
+          rm -f /tmp/tcar-project/youtubepro/local.properties
+          echo "TCAR_PROJECT=/tmp/tcar-project/youtubepro" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35
+        shell: bash
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.14.5
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14.5"
-      - name: Restore source
+
+      - name: Build release APK
+        shell: bash
         run: |
-          cat source/chunks/source.part*.b64 | tr -d '\r\n' | base64 --decode > /tmp/tcar-source.zip
-          echo "6dceee3907a924923ae7521190ece51aecd3a2d2138f2e7abbc4168a02512891  /tmp/tcar-source.zip" | sha256sum -c -
-          mkdir project
-          unzip -q /tmp/tcar-source.zip -d project
-      - name: Build
-        run: gradle -p project :app:assembleRelease --stacktrace
-      - name: Collect APK
-        run: |
+          set -o pipefail
           mkdir -p built
-          apk="$(find project/app/build/outputs/apk/release -type f -name '*.apk' | head -1)"
+          gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace 2>&1 | tee built/build.log
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -maxdepth 1 -type f -name '*.apk' | head -1)"
           test -n "$apk"
           cp "$apk" built/T-Car.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs built/T-Car.apk | tee -a built/build.log
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging built/T-Car.apk > built/badging.txt
           sha256sum built/T-Car.apk > built/T-Car.apk.sha256
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: T-Car-APK
           path: |
             built/T-Car.apk
             built/T-Car.apk.sha256
+            built/badging.txt
+            built/build.log
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="tcar-build-${{ github.run_number }}"
+          gh release create "$tag"             built/T-Car.apk             built/T-Car.apk.sha256             --title "T-Car build ${{ github.run_number }}"             --notes "Built from the tested background-playback source. Source SHA-256: 824899f63343f1e2da6d84b491ec5b4fd6fb5087ffbfde9384c932a658b98f7f"
