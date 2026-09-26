@@ -26,6 +26,7 @@ jobs:
           unzip -q T-Car_source_ok.zip -d /tmp/tcar
           test -f /tmp/tcar/settings.gradle.kts
           test -f /tmp/tcar/app/build.gradle.kts
+          sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
           echo "TCAR_PROJECT=/tmp/tcar" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v5
