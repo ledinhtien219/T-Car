@@ -36,7 +36,7 @@ old_fetch = '''                val targetUrl = getM3uUrl(context)
                     val res = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { parseM3uStream(it) }
                     if (res.isNotEmpty()) res else parseLocalOrDefault(context)
                 } catch (ex: Exception) {
-                    Log.w(TAG, "Network fetch failed, fallback to local/asset: " + ex.message)
+                    Log.w(TAG, "Network fetch failed, fallback to local/asset: ${ex.message}")
                     parseLocalOrDefault(context)
                 }
 '''
@@ -55,7 +55,7 @@ new_fetch = '''                val targetUrl = getM3uUrl(context)
                         val res = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { parseM3uStream(it) }
                         if (res.isNotEmpty()) res else parseLocalOrDefault(context)
                     } catch (ex: Exception) {
-                        Log.w(TAG, "Network fetch failed, fallback to local/asset: " + ex.message)
+                        Log.w(TAG, "Network fetch failed, fallback to local/asset: ${ex.message}")
                         parseLocalOrDefault(context)
                     }
                 }
