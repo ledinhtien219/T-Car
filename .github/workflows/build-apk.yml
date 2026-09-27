@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - T-Car_source_ok.zip
+      - source/TCAR.zip
       - .github/workflows/build-apk.yml
 
 jobs:
@@ -16,14 +16,14 @@ jobs:
 
       - name: Verify source
         run: |
-          echo "6dceee3907a924923ae7521190ece51aecd3a2d2138f2e7abbc4168a02512891  T-Car_source_ok.zip" | sha256sum -c -
-          unzip -t T-Car_source_ok.zip
+          echo "49861ac0ad4ccb2c93c140b5f36ff7ddf91bf49d76bc3b4801001d80626ca763  source/TCAR.zip" | sha256sum -c -
+          unzip -t source/TCAR.zip
 
       - name: Extract source
         run: |
           rm -rf /tmp/tcar
           mkdir -p /tmp/tcar
-          unzip -q T-Car_source_ok.zip -d /tmp/tcar
+          unzip -q source/TCAR.zip -d /tmp/tcar
           test -f /tmp/tcar/settings.gradle.kts
           test -f /tmp/tcar/app/build.gradle.kts
           sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
@@ -59,12 +59,12 @@ jobs:
           mkdir -p built
           apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
           test -n "$apk"
-          cp "$apk" built/T-Car.apk
-          sha256sum built/T-Car.apk > built/T-Car.apk.sha256
+          cp "$apk" built/T-Car_v0.8.150.apk
+          sha256sum built/T-Car_v0.8.150.apk > built/T-Car_v0.8.150.apk.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: T-Car-APK
+          name: T-Car-v0.8.150-APK
           path: |
-            built/T-Car.apk
-            built/T-Car.apk.sha256
+            built/T-Car_v0.8.150.apk
+            built/T-Car_v0.8.150.apk.sha256
