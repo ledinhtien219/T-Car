@@ -8,27 +8,49 @@ on:
       - source/TCAR.zip
       - .github/workflows/build-apk.yml
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify source
+      - name: Verify source ZIP
         run: |
-          echo "49861ac0ad4ccb2c93c140b5f36ff7ddf91bf49d76bc3b4801001d80626ca763  source/TCAR.zip" | sha256sum -c -
+          set -euo pipefail
+          test -f source/TCAR.zip
           unzip -t source/TCAR.zip
+          sha256sum source/TCAR.zip
 
-      - name: Extract source
+      - name: Extract source and detect version
         run: |
+          set -euo pipefail
           rm -rf /tmp/tcar
           mkdir -p /tmp/tcar
           unzip -q source/TCAR.zip -d /tmp/tcar
           chmod -R u+rwX /tmp/tcar
+
           test -f /tmp/tcar/settings.gradle.kts
           test -f /tmp/tcar/app/build.gradle.kts
-          sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
+
+          if [ -f /tmp/tcar/gradle.properties ]; then
+            sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
+          fi
+
+          VERSION_NAME="$(grep -oP 'versionName\s*=\s*"\K[^"]+' /tmp/tcar/app/build.gradle.kts | head -1 || true)"
+          VERSION_CODE="$(grep -oP 'versionCode\s*=\s*\K[0-9]+' /tmp/tcar/app/build.gradle.kts | head -1 || true)"
+
+          [ -n "$VERSION_NAME" ] || VERSION_NAME="unknown"
+          [ -n "$VERSION_CODE" ] || VERSION_CODE="0"
+
+          APK_NAME="T-Car_v${VERSION_NAME}_code${VERSION_CODE}_build${GITHUB_RUN_NUMBER}.apk"
+
           echo "TCAR_PROJECT=/tmp/tcar" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v5
         with:
@@ -57,15 +79,24 @@ jobs:
 
       - name: Collect APK
         run: |
+          set -euo pipefail
           mkdir -p built
           apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
           test -n "$apk"
-          cp "$apk" built/T-Car_v0.8.150.apk
-          sha256sum built/T-Car_v0.8.150.apk > built/T-Car_v0.8.150.apk.sha256
+          cp "$apk" "built/$APK_NAME"
+          sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: T-Car-v0.8.150-APK
+          name: T-Car-v${{ env.VERSION_NAME }}-build-${{ github.run_number }}
           path: |
-            built/T-Car_v0.8.150.apk
-            built/T-Car_v0.8.150.apk.sha256
+            built/${{ env.APK_NAME }}
+            built/${{ env.APK_NAME }}.sha256
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          gh release create "$TAG"             "built/$APK_NAME"             "built/$APK_NAME.sha256"             --title "T-Car v$VERSION_NAME (code $VERSION_CODE) - build #$GITHUB_RUN_NUMBER"             --notes "Automatic build from commit $GITHUB_SHA"
