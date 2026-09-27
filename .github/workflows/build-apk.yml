@@ -90,10 +90,11 @@ jobs:
           TCAR_KEY_PASSWORD: ${{ secrets.TCAR_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${TCAR_KEYSTORE_BASE64:?Missing repository secret TCAR_KEYSTORE_BASE64}"
-          : "${TCAR_KEYSTORE_PASSWORD:?Missing repository secret TCAR_KEYSTORE_PASSWORD}"
-          : "${TCAR_KEY_ALIAS:?Missing repository secret TCAR_KEY_ALIAS}"
-          : "${TCAR_KEY_PASSWORD:?Missing repository secret TCAR_KEY_PASSWORD}"
+          if [ -z "$TCAR_KEYSTORE_BASE64" ] || [ -z "$TCAR_KEYSTORE_PASSWORD" ] || [ -z "$TCAR_KEY_ALIAS" ] || [ -z "$TCAR_KEY_PASSWORD" ]; then
+            echo "Stable signing secrets are not configured; compile-only mode."
+            echo "TCAR_SIGNING_READY=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
 
           KEYSTORE_PATH="/tmp/tcar-release.jks"
           printf '%s' "$TCAR_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
@@ -105,6 +106,7 @@ jobs:
             -alias "$TCAR_KEY_ALIAS" >/dev/null
 
           echo "TCAR_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "TCAR_SIGNING_READY=true" >> "$GITHUB_ENV"
 
 
       - name: Prepare Android SDK
@@ -132,6 +134,7 @@ jobs:
         run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
 
       - name: Collect and verify signed APK
+        if: env.TCAR_SIGNING_READY == 'true'
         run: |
           set -euo pipefail
           mkdir -p built
@@ -147,6 +150,7 @@ jobs:
           sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
 
       - uses: actions/upload-artifact@v4
+        if: env.TCAR_SIGNING_READY == 'true'
         with:
           name: T-Car-v${{ env.VERSION_NAME }}-build-${{ github.run_number }}
           path: |
@@ -155,6 +159,7 @@ jobs:
             built/${{ env.APK_NAME }}.cert.txt
 
       - name: Publish GitHub Release
+        if: env.TCAR_SIGNING_READY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

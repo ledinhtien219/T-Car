@@ -23,15 +23,16 @@ new_signing = '''    signingConfigs {
             val ksAlias = System.getenv("TCAR_KEY_ALIAS")
             val ksKeyPassword = System.getenv("TCAR_KEY_PASSWORD")
 
-            require(!ksPath.isNullOrBlank()) { "TCAR_KEYSTORE_PATH is required" }
-            require(!ksStorePassword.isNullOrBlank()) { "TCAR_KEYSTORE_PASSWORD is required" }
-            require(!ksAlias.isNullOrBlank()) { "TCAR_KEY_ALIAS is required" }
-            require(!ksKeyPassword.isNullOrBlank()) { "TCAR_KEY_PASSWORD is required" }
-
-            storeFile = file(ksPath)
-            storePassword = ksStorePassword
-            keyAlias = ksAlias
-            keyPassword = ksKeyPassword
+            if (!ksPath.isNullOrBlank() &&
+                !ksStorePassword.isNullOrBlank() &&
+                !ksAlias.isNullOrBlank() &&
+                !ksKeyPassword.isNullOrBlank()
+            ) {
+                storeFile = file(ksPath)
+                storePassword = ksStorePassword
+                keyAlias = ksAlias
+                keyPassword = ksKeyPassword
+            }
         }
     }
 '''
@@ -42,7 +43,11 @@ if old_signing not in text:
 text = text.replace(old_signing, new_signing, 1)
 
 old_release = '            signingConfig = signingConfigs.getByName("debug")'
-new_release = '            signingConfig = signingConfigs.getByName("release")'
+new_release = '''            signingConfig = if (System.getenv("TCAR_KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }'''
 
 if old_release not in text:
     raise RuntimeError("Expected debug release signingConfig not found")
