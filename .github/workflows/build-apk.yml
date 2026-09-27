@@ -97,16 +97,45 @@ jobs:
           fi
 
           KEYSTORE_PATH="/tmp/tcar-release.jks"
-          printf '%s' "$TCAR_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+
+          python3 - <<'PY'
+          import os, base64, re
+          raw = os.environ["TCAR_KEYSTORE_BASE64"].strip()
+          if raw.startswith("TCAR_KEYSTORE_BASE64="):
+              raw = raw.split("=", 1)[1]
+          raw = raw.strip().strip('"').strip("'")
+          raw = re.sub(r"\\s+", "", raw)
+          data = base64.b64decode(raw, validate=True)
+          open("/tmp/tcar-release.jks", "wb").write(data)
+          PY
+
+          clean_secret() {
+            local value="$1"
+            local name="$2"
+            value="${value#${name}=}"
+            value="${value%\"}"
+            value="${value#\"}"
+            value="${value%\'}"
+            value="${value#\'}"
+            printf '%s' "$value"
+          }
+
+          STORE_PASS="$(clean_secret "$TCAR_KEYSTORE_PASSWORD" "TCAR_KEYSTORE_PASSWORD")"
+          KEY_ALIAS="$(clean_secret "$TCAR_KEY_ALIAS" "TCAR_KEY_ALIAS")"
+          KEY_PASS="$(clean_secret "$TCAR_KEY_PASSWORD" "TCAR_KEY_PASSWORD")"
+
           chmod 600 "$KEYSTORE_PATH"
 
           keytool -list \
             -keystore "$KEYSTORE_PATH" \
-            -storepass "$TCAR_KEYSTORE_PASSWORD" \
-            -alias "$TCAR_KEY_ALIAS" >/dev/null
+            -storepass "$STORE_PASS" \
+            -alias "$KEY_ALIAS" >/dev/null
 
           echo "TCAR_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
           echo "TCAR_SIGNING_READY=true" >> "$GITHUB_ENV"
+          echo "TCAR_SIGNING_STORE_PASS=$STORE_PASS" >> "$GITHUB_ENV"
+          echo "TCAR_SIGNING_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "TCAR_SIGNING_KEY_PASS=$KEY_PASS" >> "$GITHUB_ENV"
 
 
       - name: Prepare Android SDK
@@ -128,9 +157,9 @@ jobs:
 
       - name: Build release
         env:
-          TCAR_KEYSTORE_PASSWORD: ${{ secrets.TCAR_KEYSTORE_PASSWORD }}
-          TCAR_KEY_ALIAS: ${{ secrets.TCAR_KEY_ALIAS }}
-          TCAR_KEY_PASSWORD: ${{ secrets.TCAR_KEY_PASSWORD }}
+          TCAR_KEYSTORE_PASSWORD: ${{ env.TCAR_SIGNING_STORE_PASS }}
+          TCAR_KEY_ALIAS: ${{ env.TCAR_SIGNING_ALIAS }}
+          TCAR_KEY_PASSWORD: ${{ env.TCAR_SIGNING_KEY_PASS }}
         run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
 
       - name: Collect and verify signed APK
