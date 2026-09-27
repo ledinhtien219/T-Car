@@ -1,0 +1,317 @@
+--- tcar_base/app/build.gradle.kts	1980-01-01 00:00:00.000000000 +0000
++++ tcar_work/app/build.gradle.kts	2026-09-27 02:47:57.214824911 +0000
+@@ -12,8 +12,8 @@
+         applicationId = "com.carhud.app"
+         minSdk = 29
+         targetSdk = 35
+-        versionCode = 176
+-        versionName = "0.8.150"
++        versionCode = 177
++        versionName = "0.8.151"
+ 
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+     }
+--- tcar_base/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt	1980-01-01 00:00:00.000000000 +0000
++++ tcar_work/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt	2026-09-27 02:46:05.075924978 +0000
+@@ -23,7 +23,13 @@
+     const val KEY_MASTER_ALERTS_ENABLED = "key_master_alerts_enabled" // default true
+     const val KEY_ALERT_OVERSPEED = "key_alert_overspeed" // default true
+     const val KEY_ALERT_TURN_MANEUVER = "key_alert_turn_maneuver" // default true
+-    const val KEY_ALERT_VOICE_TTS = "key_alert_voice_tts" // default true
++    const val KEY_ALERT_VOICE_TTS = "key_alert_voice_tts" // legacy switch
++    const val KEY_ALERT_AUDIO_MODE = "key_alert_audio_mode" // tone, voice, both, off
++
++    const val ALERT_AUDIO_TONE = "tone"
++    const val ALERT_AUDIO_VOICE = "voice"
++    const val ALERT_AUDIO_BOTH = "both"
++    const val ALERT_AUDIO_OFF = "off"
+     const val KEY_HUD_POS_X = "key_hud_pos_x" // default 28
+     const val KEY_HUD_POS_Y = "key_hud_pos_y" // default 32
+     const val KEY_SHOW_IN_APP_PREVIEW = "key_show_in_app_hud_preview" // default true
+@@ -170,6 +176,33 @@
+         getPrefs(context).edit().putBoolean(KEY_ALERT_VOICE_TTS, enabled).apply()
+     }
+ 
++    /**
++     * Audio style for road warnings. New installs/default migration use a short
++     * notification tone so warnings stay noticeable without constant TTS speech.
++     */
++    fun getAlertAudioMode(context: Context): String {
++        val value = getPrefs(context).getString(KEY_ALERT_AUDIO_MODE, ALERT_AUDIO_TONE)
++        return when (value) {
++            ALERT_AUDIO_TONE, ALERT_AUDIO_VOICE, ALERT_AUDIO_BOTH, ALERT_AUDIO_OFF -> value
++            else -> ALERT_AUDIO_TONE
++        }
++    }
++
++    fun setAlertAudioMode(context: Context, mode: String) {
++        val safeMode = when (mode) {
++            ALERT_AUDIO_TONE, ALERT_AUDIO_VOICE, ALERT_AUDIO_BOTH, ALERT_AUDIO_OFF -> mode
++            else -> ALERT_AUDIO_TONE
++        }
++        getPrefs(context).edit().putString(KEY_ALERT_AUDIO_MODE, safeMode).apply()
++    }
++
++    fun alertAudioModeLabel(context: Context): String = when (getAlertAudioMode(context)) {
++        ALERT_AUDIO_TONE -> "Ting ngắn"
++        ALERT_AUDIO_VOICE -> "Giọng nói"
++        ALERT_AUDIO_BOTH -> "Ting + giọng"
++        else -> "Tắt"
++    }
++
+     fun getPosition(context: Context): Pair<Int, Int> {
+         val x = getPrefs(context).getInt(KEY_HUD_POS_X, 28)
+         val y = getPrefs(context).getInt(KEY_HUD_POS_Y, 32)
+--- tcar_base/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt	1980-01-01 00:00:00.000000000 +0000
++++ tcar_work/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt	2026-09-27 02:46:05.076541510 +0000
+@@ -3,6 +3,7 @@
+ import android.content.Context
+ import android.media.AudioAttributes
+ import android.media.AudioManager
++import android.media.ToneGenerator
+ import android.os.Bundle
+ import android.speech.tts.TextToSpeech
+ import android.util.Log
+@@ -28,6 +29,7 @@
+     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+ 
+     private var tts: TextToSpeech? = null
++    private var toneGenerator: ToneGenerator? = null
+     private var isInitialized = false
+     private var isVietnameseSupported = false
+ 
+@@ -46,6 +48,8 @@
+     private const val SAME_TEXT_COOLDOWN_MS = 8_000L
+     private const val ALERT_BUCKET_COOLDOWN_MS = 5_000L
+     private const val OVERSPEED_REPEAT_MS = 30_000L
++    private const val TONE_COOLDOWN_MS = 700L
++    private var lastToneTime: Long = 0L
+ 
+     private var appContext: Context? = null
+     private var listenJob: Job? = null
+@@ -110,14 +114,20 @@
+     }
+ 
+     fun handleAlertState(alert: VietmapAlertData) {
+-        if (!isInitialized || tts == null) return
+-
+         val ctx = appContext
+-        if (ctx != null) {
+-            if (!WazeHudManager.isMasterAlertsEnabled(ctx)) return
+-            val ttsEnabled = WazeHudManager.isVoiceTtsEnabled(ctx) ||
+-                VietmapSettingsManager.isVoiceAlertEnabled(ctx)
+-            if (!ttsEnabled) return
++        if (ctx != null && !WazeHudManager.isMasterAlertsEnabled(ctx)) return
++
++        val audioMode = ctx?.let { WazeHudManager.getAlertAudioMode(it) }
++            ?: WazeHudManager.ALERT_AUDIO_TONE
++        if (audioMode == WazeHudManager.ALERT_AUDIO_OFF) return
++
++        // TTS is only needed in voice modes. Tone-only alerts must still work even
++        // when the speech engine is unavailable or still initializing.
++        if ((audioMode == WazeHudManager.ALERT_AUDIO_VOICE ||
++                audioMode == WazeHudManager.ALERT_AUDIO_BOTH) &&
++            (!isInitialized || tts == null)
++        ) {
++            ctx?.let { init(it) }
+         }
+ 
+         val now = System.currentTimeMillis()
+@@ -141,7 +151,7 @@
+             if (shouldSpeak) {
+                 lastOverspeedSpeakTime = now
+                 val limitPhrase = limit?.let { " $it ki lô mét trên giờ" }.orEmpty()
+-                speakAlert(
++                playConfiguredAlert(
+                     "Cảnh báo! Bạn đang vượt quá tốc độ cho phép$limitPhrase.",
+                     isPriority = true
+                 )
+@@ -243,7 +253,40 @@
+         lastAlertKey = key
+         lastAlertDistanceBucket = bucket
+         lastAlertSpeakTime = now
+-        speakAlert(fullSentence, isPriority = WazeAlertPolicy.isCritical(effWarning))
++        playConfiguredAlert(fullSentence, isPriority = WazeAlertPolicy.isCritical(effWarning))
++    }
++
++    private fun playConfiguredAlert(text: String, isPriority: Boolean = false) {
++        val ctx = appContext
++        val mode = ctx?.let { WazeHudManager.getAlertAudioMode(it) }
++            ?: WazeHudManager.ALERT_AUDIO_TONE
++
++        when (mode) {
++            WazeHudManager.ALERT_AUDIO_TONE -> playAlertTone(isPriority)
++            WazeHudManager.ALERT_AUDIO_VOICE -> speakAlert(text, isPriority)
++            WazeHudManager.ALERT_AUDIO_BOTH -> {
++                playAlertTone(isPriority)
++                speakAlert(text, isPriority)
++            }
++        }
++    }
++
++    fun playAlertTone(isPriority: Boolean = false) {
++        val now = System.currentTimeMillis()
++        if (!isPriority && now - lastToneTime < TONE_COOLDOWN_MS) return
++        lastToneTime = now
++
++        try {
++            if (toneGenerator == null) {
++                toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
++            }
++            // A short, clean notification beep mixed on the music stream. It does
++            // not request audio focus, so music/video playback is not interrupted.
++            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, if (isPriority) 220 else 160)
++            Log.i(TAG, "Car alert tone: ting")
++        } catch (e: Exception) {
++            Log.e(TAG, "Alert tone failed", e)
++        }
+     }
+ 
+     fun speakAlert(text: String, isPriority: Boolean = false) {
+@@ -280,9 +323,14 @@
+         isOverspeed: Boolean = false,
+         customPhrase: String? = null
+     ) {
+-        init(context)
++        appContext = context.applicationContext
++        val mode = WazeHudManager.getAlertAudioMode(context)
++        if (mode == WazeHudManager.ALERT_AUDIO_VOICE || mode == WazeHudManager.ALERT_AUDIO_BOTH) {
++            init(context)
++        }
++
+         if (isOverspeed) {
+-            speakAlert("Cảnh báo! Bạn đang vượt quá tốc độ cho phép 60!", isPriority = true)
++            playConfiguredAlert("Cảnh báo! Bạn đang vượt quá tốc độ cho phép 60!", isPriority = true)
+             return
+         }
+         val phrase = customPhrase ?: warningType.voicePhrase
+@@ -292,9 +340,11 @@
+             } else {
+                 "Chú ý! $phrase, cách 200 mét."
+             }
+-            speakAlert(voiceText, isPriority = true)
++            playConfiguredAlert(voiceText, isPriority = true)
+         } else if (warningType.label.isNotBlank()) {
+-            speakAlert("Chú ý! ${warningType.label}, cách 200 mét.", isPriority = true)
++            playConfiguredAlert("Chú ý! ${warningType.label}, cách 200 mét.", isPriority = true)
++        } else {
++            playConfiguredAlert("Cảnh báo", isPriority = true)
+         }
+     }
+ 
+@@ -327,9 +377,11 @@
+             listenJob = null
+             tts?.stop()
+             tts?.shutdown()
++            toneGenerator?.release()
+         } catch (_: Exception) {
+         } finally {
+             tts = null
++            toneGenerator = null
+             isInitialized = false
+             pendingSpeakText = null
+             lastAlertKey = ""
+--- tcar_base/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt	1980-01-01 00:00:00.000000000 +0000
++++ tcar_work/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt	2026-09-27 02:46:05.084719170 +0000
+@@ -1230,10 +1230,67 @@
+                 content.addView(createSeparator())
+ 
+                 // ----------------------------------------------------
+-                // PHẦN: PHÁT THỬ BẰNG GIỌNG NÓI (VOICE ALERT TEST SECTION)
++                // ÂM THANH CẢNH BÁO: TING / GIỌNG NÓI / CẢ HAI / TẮT
++                // ----------------------------------------------------
++                val currentAlertAudioMode = WazeHudManager.getAlertAudioMode(this@SettingsActivity)
++                val alertAudioSubtitle = when (currentAlertAudioMode) {
++                    WazeHudManager.ALERT_AUDIO_TONE -> "Chỉ phát tiếng ting ngắn khi có cảnh báo • không đọc dài"
++                    WazeHudManager.ALERT_AUDIO_VOICE -> "Đọc cảnh báo bằng giọng nói tiếng Việt (TTS)"
++                    WazeHudManager.ALERT_AUDIO_BOTH -> "Phát ting trước rồi đọc nội dung cảnh báo"
++                    else -> "Không phát âm thanh cảnh báo"
++                }
++                val alertAudioBadge = when (currentAlertAudioMode) {
++                    WazeHudManager.ALERT_AUDIO_TONE -> "🔔 Ting"
++                    WazeHudManager.ALERT_AUDIO_VOICE -> "🗣️ Giọng"
++                    WazeHudManager.ALERT_AUDIO_BOTH -> "🔔 + 🗣️"
++                    else -> "🔕 Tắt"
++                }
++
++                content.addView(
++                    settingCard(
++                        title = "ÂM THANH CẢNH BÁO",
++                        subtitle = alertAudioSubtitle,
++                        badgeText = alertAudioBadge,
++                        onClick = {
++                            val labels = arrayOf(
++                                "🔔 Ting ngắn (gọn, ít làm phiền)",
++                                "🗣️ Giọng nói tiếng Việt (TTS)",
++                                "🔔 + 🗣️ Ting + giọng nói",
++                                "🔕 Tắt âm thanh cảnh báo"
++                            )
++                            val values = arrayOf(
++                                WazeHudManager.ALERT_AUDIO_TONE,
++                                WazeHudManager.ALERT_AUDIO_VOICE,
++                                WazeHudManager.ALERT_AUDIO_BOTH,
++                                WazeHudManager.ALERT_AUDIO_OFF
++                            )
++                            val selected = values.indexOf(WazeHudManager.getAlertAudioMode(this@SettingsActivity)).coerceAtLeast(0)
++                            AlertDialog.Builder(this@SettingsActivity)
++                                .setTitle("Chọn kiểu âm thanh cảnh báo")
++                                .setSingleChoiceItems(labels, selected) { dialog, which ->
++                                    val mode = values[which]
++                                    WazeHudManager.setAlertAudioMode(this@SettingsActivity, mode)
++                                    dialog.dismiss()
++                                    if (mode != WazeHudManager.ALERT_AUDIO_OFF) {
++                                        CarTtsManager.speakTestWarning(
++                                            this@SettingsActivity,
++                                            VietmapWarningType.HAZARD,
++                                            customPhrase = "Nguy hiểm phía trước"
++                                        )
++                                    }
++                                    recreate()
++                                }
++                                .setNegativeButton("Hủy", null)
++                                .show()
++                        }
++                    )
++                )
++
++                // ----------------------------------------------------
++                // PHẦN: PHÁT THỬ CẢNH BÁO THEO CHẾ ĐỘ ÂM THANH ĐÃ CHỌN
+                 // ----------------------------------------------------
+                 val voiceTestHeader = TextView(this).apply {
+-                    text = "🔊 PHÁT THỬ CẢNH BÁO BẰNG GIỌNG NÓI (TTS)"
++                    text = "🔊 PHÁT THỬ CẢNH BÁO"
+                     textSize = 12f
+                     typeface = Typeface.DEFAULT_BOLD
+                     setTextColor(colorAccent)
+@@ -1242,7 +1299,7 @@
+                 content.addView(voiceTestHeader)
+ 
+                 val voiceTestSub = TextView(this).apply {
+-                    text = "Bấm bất kỳ cảnh báo nào bên dưới để nghe giọng nói tiếng Việt và kiểm tra hiển thị trên HUD"
++                    text = "Bấm cảnh báo để thử đúng chế độ âm thanh đã chọn ở trên và kiểm tra hiển thị HUD"
+                     textSize = 11f
+                     setTextColor(colorTextSecondary)
+                     setPadding(0, 0, 0, dp(8))
+@@ -1317,7 +1374,7 @@
+                                 maxLines = 1
+                             })
+                             addView(TextView(this@SettingsActivity).apply {
+-                                text = "▶ Nghe giọng"
++                                text = "▶ Thử âm thanh"
+                                 textSize = 9.5f
+                                 setTextColor(colorAccent)
+                             })
+@@ -1348,10 +1405,11 @@
+ 
+                             inAppFloatingHud?.updateUi(VietmapStateRepository.alertState.value)
+ 
++                            val audioLabel = WazeHudManager.alertAudioModeLabel(this@SettingsActivity)
+                             val toastMsg = if (tc.isOverspeed) {
+-                                "🔊 Đang phát: Cảnh báo quá tốc độ cho phép!"
++                                "🔊 $audioLabel: Cảnh báo quá tốc độ"
+                             } else {
+-                                "🔊 Đang phát: ${tc.warningType.label} (${tc.distText})"
++                                "🔊 $audioLabel: ${tc.warningType.label} (${tc.distText})"
+                             }
+                             Toast.makeText(this@SettingsActivity, toastMsg, Toast.LENGTH_SHORT).show()
+                         }
