@@ -209,25 +209,6 @@
              isInitialized = false
              pendingSpeakText = null
              lastAlertKey = ""
---- a/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
-+++ b/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
-@@ -1291,7 +1291,7 @@
-                 content.addView(
-                     settingCard(
-                         title = "TIẾNG TING CẢNH BÁO",
--                        subtitle = "Có 5 âm khác nhau • chạm để chọn và nghe thử",
-+                        subtitle = "5 âm khác nhau thật • cùng mức âm lượng • chạm để nghe thử",
-                         badgeText = "🔔 ${WazeHudManager.alertToneStyleLabel(this@SettingsActivity)}",
-                         onClick = {
-@@ -1302,7 +1302,7 @@
-                                 "2. Ting đôi — 2 nhịp nhanh",
-                                 "3. Ting ba nhanh — 3 nhịp liên tiếp",
-                                 "4. Dài - ngắn — 1 nhịp dài + 1 nhịp ngắn",
--                                "5. Cảnh báo 3 nhịp — 2 nhịp mạnh + 1 nhịp dài"
-+                                "5. Cảnh báo 3 nhịp — 2 nhịp trầm + 1 nhịp dài"
-                             )
-                             val values = arrayOf(
-                                 WazeHudManager.ALERT_TONE_BEEP,
 --- a/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
 +++ b/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
 @@ -458,7 +458,8 @@
