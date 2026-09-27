@@ -51,6 +51,13 @@ jobs:
             done < <(find "$GITHUB_WORKSPACE/patches" -maxdepth 1 -type f -name '*.patch' | sort)
           fi
 
+          if compgen -G "$GITHUB_WORKSPACE/patches/*.py" > /dev/null; then
+            while IFS= read -r transform_script; do
+              echo "Applying transform: $transform_script"
+              python3 "$transform_script"
+            done < <(find "$GITHUB_WORKSPACE/patches" -maxdepth 1 -type f -name '*.py' | sort)
+          fi
+
           if [ -f "$GITHUB_WORKSPACE/patches/version.properties" ]; then
             source "$GITHUB_WORKSPACE/patches/version.properties"
             sed -i -E "s/(versionCode[[:space:]]*=[[:space:]]*)[0-9]+/\1${VERSION_CODE}/" /tmp/tcar/app/build.gradle.kts
