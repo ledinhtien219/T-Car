@@ -24,6 +24,7 @@ jobs:
           rm -rf /tmp/tcar
           mkdir -p /tmp/tcar
           unzip -q source/TCAR.zip -d /tmp/tcar
+          chmod -R u+rwX /tmp/tcar
           test -f /tmp/tcar/settings.gradle.kts
           test -f /tmp/tcar/app/build.gradle.kts
           sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
