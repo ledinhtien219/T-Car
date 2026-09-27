@@ -1,0 +1,294 @@
+--- a/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
+@@ -1,8 +1,9 @@
+ package com.carhud.aaproxy
+ 
+ import android.content.Context
+ import android.media.AudioAttributes
++import android.media.AudioFormat
+ import android.media.AudioManager
+-import android.media.ToneGenerator
++import android.media.AudioTrack
+ import android.os.Bundle
+ import android.speech.tts.TextToSpeech
+ import android.util.Log
+@@ -14,6 +15,8 @@
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import java.util.Locale
++import kotlin.math.PI
++import kotlin.math.sin
+ 
+ /**
+  * Automotive Vietnamese voice alerts for Waze/HLP data.
+@@ -29,7 +32,7 @@
+     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+ 
+     private var tts: TextToSpeech? = null
+-    private var toneGenerator: ToneGenerator? = null
++    @Volatile private var alertAudioTrack: AudioTrack? = null
+     private var toneSequenceJob: Job? = null
+     private var isInitialized = false
+     private var isVietnameseSupported = false
+@@ -278,54 +281,105 @@
+         if (!isPriority && now - lastToneTime < TONE_COOLDOWN_MS) return
+         lastToneTime = now
+ 
+         val ctx = appContext
+         val toneStyle = ctx?.let { WazeHudManager.getAlertToneStyle(it) }
+             ?: WazeHudManager.ALERT_TONE_BEEP
+ 
+         toneSequenceJob?.cancel()
+-        toneSequenceJob = scope.launch {
++        releaseAlertAudioTrack()
++
++        toneSequenceJob = scope.launch(Dispatchers.Default) {
++            var localTrack: AudioTrack? = null
+             try {
+-                if (toneGenerator == null) {
+-                    toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+-                }
+-
+-                suspend fun pulse(type: Int, durationMs: Int, pauseMs: Long = 0L) {
+-                    toneGenerator?.startTone(type, durationMs)
+-                    delay(durationMs.toLong())
+-                    if (pauseMs > 0L) delay(pauseMs)
+-                }
+-
+-                // Distinct RHYTHMS are intentional. Some Android head units map
+-                // several ToneGenerator presets to nearly the same sound, so the
+-                // cadence itself guarantees that all five choices are audible as
+-                // different warning patterns. No audio focus is requested.
+-                when (toneStyle) {
+-                    WazeHudManager.ALERT_TONE_DOUBLE_BEEP -> {
+-                        pulse(ToneGenerator.TONE_PROP_BEEP, 90, 80)
+-                        pulse(ToneGenerator.TONE_PROP_BEEP, 90)
+-                    }
+-                    WazeHudManager.ALERT_TONE_ACK -> {
+-                        pulse(ToneGenerator.TONE_PROP_BEEP2, 70, 55)
+-                        pulse(ToneGenerator.TONE_PROP_BEEP2, 70, 55)
+-                        pulse(ToneGenerator.TONE_PROP_BEEP2, 110)
+-                    }
+-                    WazeHudManager.ALERT_TONE_PROMPT -> {
+-                        pulse(ToneGenerator.TONE_PROP_ACK, 260, 100)
+-                        pulse(ToneGenerator.TONE_PROP_BEEP, 80)
+-                    }
+-                    WazeHudManager.ALERT_TONE_STRONG -> {
+-                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 220 else 180, 70)
+-                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 220 else 180, 70)
+-                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 360 else 300)
+-                    }
+-                    else -> {
+-                        pulse(ToneGenerator.TONE_PROP_BEEP, if (isPriority) 150 else 110)
+-                    }
++                // Do not rely on ToneGenerator presets: several phones/head units
++                // map TONE_PROP_* to almost the same sound. Generate PCM ourselves
++                // so every choice has a genuinely different pitch + rhythm.
++                //
++                // All patterns intentionally use the SAME peak amplitude. Priority
++                // alerts bypass the cooldown but do not become louder, preventing
++                // perceived music-volume pumping.
++                val segments: List<Triple<Double, Int, Int>> = when (toneStyle) {
++                    WazeHudManager.ALERT_TONE_DOUBLE_BEEP -> listOf(
++                        Triple(740.0, 95, 80),
++                        Triple(1120.0, 95, 0)
++                    )
++                    WazeHudManager.ALERT_TONE_ACK -> listOf(
++                        Triple(1280.0, 70, 55),
++                        Triple(960.0, 70, 55),
++                        Triple(1280.0, 105, 0)
++                    )
++                    WazeHudManager.ALERT_TONE_PROMPT -> listOf(
++                        Triple(620.0, 260, 90),
++                        Triple(1080.0, 90, 0)
++                    )
++                    WazeHudManager.ALERT_TONE_STRONG -> listOf(
++                        Triple(520.0, 120, 75),
++                        Triple(760.0, 120, 75),
++                        Triple(980.0, 300, 0)
++                    )
++                    else -> listOf(
++                        Triple(960.0, 120, 0)
++                    )
+                 }
+-                Log.i(TAG, "Car alert tone pattern: $toneStyle")
++
++                val sampleRate = 44_100
++                val peakAmplitude = 0.24
++                val totalSamples = segments.sumOf { (_, durationMs, gapMs) ->
++                    ((durationMs + gapMs) * sampleRate / 1000)
++                }.coerceAtLeast(1)
++                val pcm = ShortArray(totalSamples)
++                var cursor = 0
++
++                for ((frequencyHz, durationMs, gapMs) in segments) {
++                    val toneSamples = (durationMs * sampleRate / 1000).coerceAtLeast(1)
++                    val fadeSamples = minOf(sampleRate / 200, toneSamples / 4).coerceAtLeast(1)
++
++                    for (i in 0 until toneSamples) {
++                        val envelope = when {
++                            i < fadeSamples -> i.toDouble() / fadeSamples.toDouble()
++                            i >= toneSamples - fadeSamples ->
++                                (toneSamples - i - 1).coerceAtLeast(0).toDouble() / fadeSamples.toDouble()
++                            else -> 1.0
++                        }
++                        val wave = sin(2.0 * PI * frequencyHz * i.toDouble() / sampleRate.toDouble())
++                        val value = (wave * Short.MAX_VALUE * peakAmplitude * envelope)
++                            .toInt()
++                            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
++                        if (cursor < pcm.size) pcm[cursor++] = value.toShort()
++                    }
++
++                    val silenceSamples = gapMs * sampleRate / 1000
++                    cursor = (cursor + silenceSamples).coerceAtMost(pcm.size)
++                }
++
++                val track = AudioTrack.Builder()
++                    .setAudioAttributes(
++                        AudioAttributes.Builder()
++                            .setUsage(AudioAttributes.USAGE_MEDIA)
++                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
++                            .build()
++                    )
++                    .setAudioFormat(
++                        AudioFormat.Builder()
++                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
++                            .setSampleRate(sampleRate)
++                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
++                            .build()
++                    )
++                    .setTransferMode(AudioTrack.MODE_STATIC)
++                    .setBufferSizeInBytes(pcm.size * 2)
++                    .build()
++
++                localTrack = track
++                alertAudioTrack = track
++                val written = track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
++                if (written <= 0) {
++                    Log.w(TAG, "Alert PCM write failed: $written")
++                    return@launch
++                }
++
++                track.play()
++                val totalDurationMs = segments.sumOf { it.second + it.third }.toLong()
++                delay(totalDurationMs + 80L)
++                Log.i(TAG, "Car alert PCM pattern: $toneStyle")
+             } catch (e: Exception) {
+                 Log.e(TAG, "Alert tone failed", e)
++            } finally {
++                localTrack?.let { track ->
++                    try { track.stop() } catch (_: Exception) {}
++                    try { track.flush() } catch (_: Exception) {}
++                    try { track.release() } catch (_: Exception) {}
++                    if (alertAudioTrack === track) alertAudioTrack = null
++                }
+             }
+         }
+     }
+ 
++    private fun releaseAlertAudioTrack() {
++        val track = alertAudioTrack ?: return
++        alertAudioTrack = null
++        try { track.stop() } catch (_: Exception) {}
++        try { track.flush() } catch (_: Exception) {}
++        try { track.release() } catch (_: Exception) {}
++    }
++
+@@ -415,14 +469,14 @@
+             toneSequenceJob?.cancel()
+             toneSequenceJob = null
+             tts?.stop()
+             tts?.shutdown()
+-            toneGenerator?.release()
++            releaseAlertAudioTrack()
+         } catch (_: Exception) {
+         } finally {
+             tts = null
+-            toneGenerator = null
++            alertAudioTrack = null
+             isInitialized = false
+             pendingSpeakText = null
+             lastAlertKey = ""
+--- a/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
++++ b/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
+@@ -1291,7 +1291,7 @@
+                 content.addView(
+                     settingCard(
+                         title = "TIẾNG TING CẢNH BÁO",
+-                        subtitle = "Có 5 âm khác nhau • chạm để chọn và nghe thử",
++                        subtitle = "5 âm khác nhau thật • cùng mức âm lượng • chạm để nghe thử",
+                         badgeText = "🔔 ${WazeHudManager.alertToneStyleLabel(this@SettingsActivity)}",
+                         onClick = {
+@@ -1302,7 +1302,7 @@
+                                 "2. Ting đôi — 2 nhịp nhanh",
+                                 "3. Ting ba nhanh — 3 nhịp liên tiếp",
+                                 "4. Dài - ngắn — 1 nhịp dài + 1 nhịp ngắn",
+-                                "5. Cảnh báo 3 nhịp — 2 nhịp mạnh + 1 nhịp dài"
++                                "5. Cảnh báo 3 nhịp — 2 nhịp trầm + 1 nhịp dài"
+                             )
+                             val values = arrayOf(
+                                 WazeHudManager.ALERT_TONE_BEEP,
+--- a/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
++++ b/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
+@@ -458,7 +458,8 @@
+                 } else if (video && video.paused) {
+                     try {
+                         if (video.muted) video.muted = false;
+-                        if (video.volume < 0.5) video.volume = 1.0;
++                        var targetVol = window.__carhudDuckingVolume !== undefined ? window.__carhudDuckingVolume : 1.0;
++                        if (Math.abs(video.volume - targetVol) > 0.05) video.volume = targetVol;
+                         video.play().catch(function() {});
+                     } catch(e) {}
+                 }
+@@ -1363,7 +1364,8 @@
+                             } else if (video && video.paused) {
+                                 try {
+                                     video.muted = false;
+-                                    if (video.volume < 0.5) video.volume = 1.0;
++                                    var targetVol = window.__carhudDuckingVolume !== undefined ? window.__carhudDuckingVolume : 1.0;
++                                    if (Math.abs(video.volume - targetVol) > 0.05) video.volume = targetVol;
+                                     video.play().catch(function() {});
+                                 } catch(e) {}
+                             }
+@@ -1395,7 +1397,8 @@
+                             }
+                             if (v) {
+                                 v.muted = false;
+-                                if (v.volume < 0.5) v.volume = 1.0;
++                                var targetVol = window.__carhudDuckingVolume !== undefined ? window.__carhudDuckingVolume : 1.0;
++                                if (Math.abs(v.volume - targetVol) > 0.05) v.volume = targetVol;
+                                 v.play();
+                                 return true;
+                             }
+@@ -1469,7 +1472,8 @@
+                         function safePlay(video) {
+                             if (!video) return;
+                             video.muted = false;
+-                            if (video.volume < 0.5) video.volume = 1.0;
++                            var targetVol = window.__carhudDuckingVolume !== undefined ? window.__carhudDuckingVolume : 1.0;
++                            if (Math.abs(video.volume - targetVol) > 0.05) video.volume = targetVol;
+                             var p = video.play();
+                             if (p !== undefined) {
+                                 p.catch(function() {
+@@ -1558,7 +1562,8 @@
+                     if (v && v.duration && !isNaN(v.duration)) {
+                         v.currentTime = v.duration - 0.5;
+                         v.muted = false;
+-                        v.volume = 1.0;
++                        var targetVol = window.__carhudDuckingVolume !== undefined ? window.__carhudDuckingVolume : 1.0;
++                        if (Math.abs(v.volume - targetVol) > 0.05) v.volume = targetVol;
+                         v.play();
+                     }
+                 })();
+@@ -1707,10 +1712,12 @@
+     }
+ 
+     fun setDuckingVolume(view: WebView?, volume: Float) {
++        val safeVolume = volume.coerceIn(0f, 1f)
+         try {
+             view?.evaluateJavascript(
+-                "try { window.__carhudDuckingVolume = $volume; var v = document.querySelector('video'); if (v) { v.volume = $volume; } } catch(e) {}",
++                "try { var t = $safeVolume; window.__carhudDuckingVolume = t; var v = document.querySelector('video'); if (v && Math.abs(v.volume - t) > 0.02) { v.volume = t; } } catch(e) {}",
+                 null
+             )
+         } catch (e: Exception) {}
