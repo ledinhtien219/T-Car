@@ -82,6 +82,31 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Prepare stable signing
+        env:
+          TCAR_KEYSTORE_BASE64: ${{ secrets.TCAR_KEYSTORE_BASE64 }}
+          TCAR_KEYSTORE_PASSWORD: ${{ secrets.TCAR_KEYSTORE_PASSWORD }}
+          TCAR_KEY_ALIAS: ${{ secrets.TCAR_KEY_ALIAS }}
+          TCAR_KEY_PASSWORD: ${{ secrets.TCAR_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${TCAR_KEYSTORE_BASE64:?Missing repository secret TCAR_KEYSTORE_BASE64}"
+          : "${TCAR_KEYSTORE_PASSWORD:?Missing repository secret TCAR_KEYSTORE_PASSWORD}"
+          : "${TCAR_KEY_ALIAS:?Missing repository secret TCAR_KEY_ALIAS}"
+          : "${TCAR_KEY_PASSWORD:?Missing repository secret TCAR_KEY_PASSWORD}"
+
+          KEYSTORE_PATH="/tmp/tcar-release.jks"
+          printf '%s' "$TCAR_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+
+          keytool -list \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$TCAR_KEYSTORE_PASSWORD" \
+            -alias "$TCAR_KEY_ALIAS" >/dev/null
+
+          echo "TCAR_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+
       - name: Prepare Android SDK
         shell: bash
         run: |
@@ -100,15 +125,25 @@ jobs:
           gradle-version: "8.14.5"
 
       - name: Build release
+        env:
+          TCAR_KEYSTORE_PASSWORD: ${{ secrets.TCAR_KEYSTORE_PASSWORD }}
+          TCAR_KEY_ALIAS: ${{ secrets.TCAR_KEY_ALIAS }}
+          TCAR_KEY_PASSWORD: ${{ secrets.TCAR_KEY_PASSWORD }}
         run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
 
-      - name: Collect APK
+      - name: Collect and verify signed APK
         run: |
           set -euo pipefail
           mkdir -p built
           apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
           test -n "$apk"
           cp "$apk" "built/$APK_NAME"
+
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "built/$APK_NAME" | tee "built/$APK_NAME.cert.txt"
+          grep -q "Signer #1 certificate SHA-256 digest: 3d985f9622c39195ccd6ea5c24b659061aa1e9aab6cef79cf02bab8134245d46" "built/$APK_NAME.cert.txt"
+
           sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
 
       - uses: actions/upload-artifact@v4
@@ -117,6 +152,7 @@ jobs:
           path: |
             built/${{ env.APK_NAME }}
             built/${{ env.APK_NAME }}.sha256
+            built/${{ env.APK_NAME }}.cert.txt
 
       - name: Publish GitHub Release
         env:
@@ -124,4 +160,6 @@ jobs:
         run: |
           set -euo pipefail
           TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
-          gh release create "$TAG"             "built/$APK_NAME"             "built/$APK_NAME.sha256"             --title "T-Car v$VERSION_NAME (code $VERSION_CODE) - build #$GITHUB_RUN_NUMBER"             --notes "Automatic build from commit $GITHUB_SHA"
+          gh release create "$TAG"             "built/$APK_NAME"             "built/$APK_NAME.sha256" \
+            "built/$APK_NAME.cert.txt" \
+            --title "T-Car v$VERSION_NAME (code $VERSION_CODE) - build #$GITHUB_RUN_NUMBER"             --notes "Automatic build from commit $GITHUB_SHA"
