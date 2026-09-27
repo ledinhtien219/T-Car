@@ -40,6 +40,10 @@ jobs:
             sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
           fi
 
+          # Normalize Kotlin sources so patches apply reliably even when the
+          # original ZIP contains a mix of Windows CRLF and Unix LF line endings.
+          find /tmp/tcar/app/src/main/java -type f -name '*.kt' -exec sed -i 's/\r$//' {} +
+
           if compgen -G "$GITHUB_WORKSPACE/patches/*.patch" > /dev/null; then
             while IFS= read -r patch_file; do
               echo "Applying patch: $patch_file"
