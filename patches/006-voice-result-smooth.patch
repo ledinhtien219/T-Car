@@ -1,0 +1,116 @@
+--- a/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
++++ b/app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt
+@@ -1669,31 +1669,20 @@
+         view.post {
+             try {
+                 val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
+-                val jsQuery = cleanQuery.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'")
+                 val host = if (view.url?.contains("www.youtube.com") == true) "https://www.youtube.com" else "https://m.youtube.com"
++                val targetUrl = "$host/results?search_query=$encoded"
+ 
+-                val js = """
+-                    (function() {
+-                        try {
+-                            window.sessionStorage.setItem('carhud_auto_play', 'true');
+-                            var q = "$jsQuery";
+-                            window.location.href = "$host/results?search_query=" + encodeURIComponent(q);
+-                        } catch(e) {
+-                            window.location = "$host/results?search_query=" + encodeURIComponent("$jsQuery");
+-                        }
+-                    })();
+-                """.trimIndent()
+-
+-                view.evaluateJavascript(js, null)
+-
+-                view.postDelayed({
+-                    try {
+-                        val currentUrl = view.url ?: ""
+-                        if (!currentUrl.contains("search_query=")) {
+-                            view.loadUrl("$host/results?search_query=$encoded")
+-                        }
+-                    } catch (e: Exception) {}
+-                }, 120)
++                // Keep this as a SINGLE navigation. The old 120 ms fallback could
++                // fire while WebView still reported the previous URL, causing the
++                // same search page to load twice and producing a visible/audio hitch
++                // right when voice recognition returned its result.
++                view.evaluateJavascript(
++                    "try { window.sessionStorage.setItem('carhud_auto_play', 'true'); } catch(e) {}",
++                    null
++                )
++                if (view.url != targetUrl) {
++                    view.loadUrl(targetUrl)
++                }
+             } catch (e: Exception) {
+                 try {
+                     val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
+--- a/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
+@@ -1405,9 +1405,13 @@
+             return
+         }
+ 
+-        searchInput.setText(query)
+-        searchInput.setSelection(query.length)
+-        YouTubePlayerHelper.setDuckingVolume(web, 1.0f)
++        if (searchInput.text.toString() != query) {
++            searchInput.setText(query)
++            searchInput.setSelection(query.length)
++        }
++
++        // SUCCESS already restores ducking volume in the voice state callback.
++        // Avoid doing the same WebView JS work twice on the result frame.
+ 
+         // Ensure active app is YouTube when doing a video search
+         if (currentActiveAppId != "youtube") {
+@@ -1418,9 +1422,13 @@
+         }
+ 
+         YouTubePlayerHelper.search(web, query)
+-        CarMediaManager.notifyVoiceState(VoiceSearchManager.State.SUCCESS, "Đang tìm: $query")
+-        updateVoiceState(VoiceSearchManager.State.SUCCESS, "Đang tìm: $query")
+-        hideSearchOverlay()
++
++        // dispatchSuccess() already emitted SUCCESS and broadcast it once. Repeating
++        // both updates here caused extra layout/draw work exactly when WebView starts
++        // navigating to the result page.
++        if (searchOverlay.visibility == View.VISIBLE) {
++            hideSearchOverlay()
++        }
+     }
+ 
+     fun playTvChannel(channelName: String) {
+--- a/app/src/main/java/com/carhud/aaproxy/MainActivity.kt
++++ b/app/src/main/java/com/carhud/aaproxy/MainActivity.kt
+@@ -1244,10 +1244,13 @@
+             return
+         }
+ 
+-        searchInput.setText(query)
+-        searchInput.setSelection(query.length)
+-        updateVoiceBanner(VoiceSearchManager.State.SUCCESS, "Đang tìm: $query")
+-        YouTubePlayerHelper.setDuckingVolume(web, 1.0f)
++        if (searchInput.text.toString() != query) {
++            searchInput.setText(query)
++            searchInput.setSelection(query.length)
++        }
++
++        // VoiceSearchManager already emitted SUCCESS and restored media volume.
++        // Avoid duplicate banner/JS updates on the same frame as result navigation.
+ 
+         if (currentActiveAppId != "youtube") {
+             val ytApp = WebAppManager.getAllApps(this).find { it.id == "youtube" } ?: WebAppManager.DEFAULT_APPS.first()
+@@ -1255,8 +1258,11 @@
+         }
+ 
+         YouTubePlayerHelper.search(web, query)
+-        CarMediaManager.notifyVoiceState(VoiceSearchManager.State.SUCCESS, "Đang tìm: $query")
+-        mainHandler.postDelayed({ hideSearchOverlay() }, 600)
++        if (searchOverlay.visibility == View.VISIBLE) {
++            mainHandler.postDelayed({
++                if (searchOverlay.visibility == View.VISIBLE) hideSearchOverlay()
++            }, 120)
++        }
+     }
+ 
+     fun playTvChannel(channelName: String) {
