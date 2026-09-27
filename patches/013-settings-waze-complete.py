@@ -470,8 +470,7 @@ new_road = '''        val laneGuidance = if (isPreviewMode || WazeHudManager.isL
             data.laneGuidance
                 ?.replace("[", "")
                 ?.replace("]", "")
-                ?.replace("\"", "")
-                ?.replace(Regex("""\\s+"""), " ")
+                ?.replace(34.toChar().toString(), "")
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
         } else null
