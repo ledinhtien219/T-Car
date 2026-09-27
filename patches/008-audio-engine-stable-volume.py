@@ -185,8 +185,15 @@ car = car[:start] + new_alert_engine + car[end:]
 car = car.replace("            toneGenerator?.release()\n", "            releaseAlertAudioTrack()\n")
 car = car.replace("            toneGenerator = null\n", "            alertAudioTrack = null\n")
 
-if "ToneGenerator" in car:
-    raise RuntimeError("ToneGenerator reference remained after PCM conversion")
+for forbidden in (
+    "import android.media.ToneGenerator",
+    "ToneGenerator.",
+    "private var toneGenerator",
+    "toneGenerator?.",
+    "toneGenerator =",
+):
+    if forbidden in car:
+        raise RuntimeError(f"ToneGenerator code reference remained: {forbidden}")
 
 car_path.write_text(car, encoding="utf-8")
 
