@@ -1,0 +1,135 @@
+--- a/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt
++++ b/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt
+@@ -25,11 +25,18 @@
+     const val KEY_ALERT_TURN_MANEUVER = "key_alert_turn_maneuver" // default true
+     const val KEY_ALERT_VOICE_TTS = "key_alert_voice_tts" // legacy switch
+     const val KEY_ALERT_AUDIO_MODE = "key_alert_audio_mode" // tone, voice, both, off
++    const val KEY_ALERT_TONE_STYLE = "key_alert_tone_style" // 5 selectable warning tones
+ 
+     const val ALERT_AUDIO_TONE = "tone"
+     const val ALERT_AUDIO_VOICE = "voice"
+     const val ALERT_AUDIO_BOTH = "both"
+     const val ALERT_AUDIO_OFF = "off"
++
++    const val ALERT_TONE_BEEP = "beep"
++    const val ALERT_TONE_DOUBLE_BEEP = "double_beep"
++    const val ALERT_TONE_ACK = "ack"
++    const val ALERT_TONE_PROMPT = "prompt"
++    const val ALERT_TONE_STRONG = "strong"
+     const val KEY_HUD_POS_X = "key_hud_pos_x" // default 28
+     const val KEY_HUD_POS_Y = "key_hud_pos_y" // default 32
+     const val KEY_SHOW_IN_APP_PREVIEW = "key_show_in_app_hud_preview" // default true
+@@ -203,6 +210,39 @@
+         else -> "Tắt"
+     }
+ 
++    fun getAlertToneStyle(context: Context): String {
++        val value = getPrefs(context).getString(KEY_ALERT_TONE_STYLE, ALERT_TONE_BEEP)
++        return when (value) {
++            ALERT_TONE_BEEP,
++            ALERT_TONE_DOUBLE_BEEP,
++            ALERT_TONE_ACK,
++            ALERT_TONE_PROMPT,
++            ALERT_TONE_STRONG -> value
++            else -> ALERT_TONE_BEEP
++        }
++    }
++
++    fun setAlertToneStyle(context: Context, style: String) {
++        val safeStyle = when (style) {
++            ALERT_TONE_BEEP,
++            ALERT_TONE_DOUBLE_BEEP,
++            ALERT_TONE_ACK,
++            ALERT_TONE_PROMPT,
++            ALERT_TONE_STRONG -> style
++            else -> ALERT_TONE_BEEP
++        }
++        getPrefs(context).edit().putString(KEY_ALERT_TONE_STYLE, safeStyle).apply()
++    }
++
++    fun alertToneStyleLabel(context: Context): String = when (getAlertToneStyle(context)) {
++        ALERT_TONE_BEEP -> "Ting ngắn"
++        ALERT_TONE_DOUBLE_BEEP -> "Ting đôi"
++        ALERT_TONE_ACK -> "Bíp xác nhận"
++        ALERT_TONE_PROMPT -> "Nhắc nhở"
++        ALERT_TONE_STRONG -> "Cảnh báo mạnh"
++        else -> "Ting ngắn"
++    }
++
+     fun getPosition(context: Context): Pair<Int, Int> {
+         val x = getPrefs(context).getInt(KEY_HUD_POS_X, 28)
+         val y = getPrefs(context).getInt(KEY_HUD_POS_Y, 32)
+--- a/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
+@@ -280,10 +280,21 @@
+             if (toneGenerator == null) {
+                 toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+             }
+-            // A short, clean notification beep mixed on the music stream. It does
+-            // not request audio focus, so music/video playback is not interrupted.
+-            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, if (isPriority) 220 else 160)
+-            Log.i(TAG, "Car alert tone: ting")
++            // Five built-in tones: no audio file is needed and no audio focus is
++            // requested, so music/video playback keeps running underneath.
++            val ctx = appContext
++            val toneStyle = ctx?.let { WazeHudManager.getAlertToneStyle(it) }
++                ?: WazeHudManager.ALERT_TONE_BEEP
++            val (toneType, normalDurationMs) = when (toneStyle) {
++                WazeHudManager.ALERT_TONE_DOUBLE_BEEP -> ToneGenerator.TONE_PROP_BEEP2 to 320
++                WazeHudManager.ALERT_TONE_ACK -> ToneGenerator.TONE_PROP_ACK to 320
++                WazeHudManager.ALERT_TONE_PROMPT -> ToneGenerator.TONE_PROP_PROMPT to 220
++                WazeHudManager.ALERT_TONE_STRONG -> ToneGenerator.TONE_PROP_NACK to 420
++                else -> ToneGenerator.TONE_PROP_BEEP to 120
++            }
++            val durationMs = if (isPriority) normalDurationMs + 80 else normalDurationMs
++            toneGenerator?.startTone(toneType, durationMs)
++            Log.i(TAG, "Car alert tone: $toneStyle")
+         } catch (e: Exception) {
+             Log.e(TAG, "Alert tone failed", e)
+         }
+--- a/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
++++ b/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
+@@ -1286,6 +1286,43 @@
+                     )
+                 )
+ 
++
++                val selectedToneStyle = WazeHudManager.getAlertToneStyle(this@SettingsActivity)
++                content.addView(
++                    settingCard(
++                        title = "TIẾNG TING CẢNH BÁO",
++                        subtitle = "Có 5 âm khác nhau • chạm để chọn và nghe thử",
++                        badgeText = "🔔 ${WazeHudManager.alertToneStyleLabel(this@SettingsActivity)}",
++                        onClick = {
++                            val labels = arrayOf(
++                                "1. Ting ngắn — gọn, nhẹ",
++                                "2. Ting đôi — 2 nhịp rõ hơn",
++                                "3. Bíp xác nhận — cao, dễ nhận biết",
++                                "4. Nhắc nhở — dài vừa",
++                                "5. Cảnh báo mạnh — trầm, nổi bật"
++                            )
++                            val values = arrayOf(
++                                WazeHudManager.ALERT_TONE_BEEP,
++                                WazeHudManager.ALERT_TONE_DOUBLE_BEEP,
++                                WazeHudManager.ALERT_TONE_ACK,
++                                WazeHudManager.ALERT_TONE_PROMPT,
++                                WazeHudManager.ALERT_TONE_STRONG
++                            )
++                            val selected = values.indexOf(selectedToneStyle).coerceAtLeast(0)
++                            AlertDialog.Builder(this@SettingsActivity)
++                                .setTitle("Chọn tiếng cảnh báo")
++                                .setSingleChoiceItems(labels, selected) { dialog, which ->
++                                    WazeHudManager.setAlertToneStyle(this@SettingsActivity, values[which])
++                                    CarTtsManager.playAlertTone(isPriority = true)
++                                    dialog.dismiss()
++                                    recreate()
++                                }
++                                .setNegativeButton("Hủy", null)
++                                .show()
++                        }
++                    )
++                )
++
+                 // ----------------------------------------------------
+                 // PHẦN: PHÁT THỬ CẢNH BÁO THEO CHẾ ĐỘ ÂM THANH ĐÃ CHỌN
+                 // ----------------------------------------------------
