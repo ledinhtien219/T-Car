@@ -7,6 +7,7 @@ on:
     paths:
       - source/TCAR.zip
       - patches/**
+      - signing/**
       - .github/workflows/build-apk.yml
 
 permissions:
@@ -43,6 +44,7 @@ jobs:
           # Normalize Kotlin sources so patches apply reliably even when the
           # original ZIP contains a mix of Windows CRLF and Unix LF line endings.
           find /tmp/tcar/app/src/main/java -type f -name '*.kt' -exec sed -i 's/\r$//' {} +
+          sed -i 's/\r$//' /tmp/tcar/app/build.gradle.kts
 
           if compgen -G "$GITHUB_WORKSPACE/patches/*.patch" > /dev/null; then
             while IFS= read -r patch_file; do
@@ -88,11 +90,27 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Prepare stable signing key
+        env:
+          TCAR_SIGNING_PASSWORD: ${{ secrets.TCAR_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TCAR_SIGNING_PASSWORD:-}" ]; then
+            echo "::error::Missing repository secret TCAR_SIGNING_PASSWORD"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/tcar-signing"
+          base64 -d "$GITHUB_WORKSPACE/signing/tcar-release.jks.enc.b64" |             openssl enc -d -aes-256-cbc -pbkdf2               -pass env:TCAR_SIGNING_PASSWORD               -out "$RUNNER_TEMP/tcar-signing/tcar-release.jks"
+          chmod 600 "$RUNNER_TEMP/tcar-signing/tcar-release.jks"
+          echo "TCAR_KEYSTORE_FILE=$RUNNER_TEMP/tcar-signing/tcar-release.jks" >> "$GITHUB_ENV"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14.5"
 
       - name: Build release
+        env:
+          TCAR_SIGNING_PASSWORD: ${{ secrets.TCAR_SIGNING_PASSWORD }}
         run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
 
       - name: Collect APK
@@ -103,6 +121,16 @@ jobs:
           test -n "$apk"
           cp "$apk" "built/$APK_NAME"
           sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
+
+      - name: Verify stable APK signature
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --print-certs "built/$APK_NAME" | tee built/signing-cert.txt
+          actual="$(grep -m1 'Signer #1 certificate SHA-256 digest:' built/signing-cert.txt | awk '{print $NF}' | tr 'A-F' 'a-f' | tr -d ':')"
+          expected="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/signing/cert-sha256.txt" | tr 'A-F' 'a-f')"
+          test "$actual" = "$expected"
 
       - uses: actions/upload-artifact@v4
         with:
