@@ -1,0 +1,78 @@
+--- a/app/src/main/java/com/carhud/aaproxy/CarDashboardView.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarDashboardView.kt
+@@ -11,6 +11,7 @@
+ import android.os.Looper
+ import android.text.TextUtils
+ import android.util.AttributeSet
++import android.util.TypedValue
+ import android.view.Gravity
+ import android.view.LayoutInflater
+ import android.view.View
+@@ -175,6 +176,59 @@
+         }
+     }
+ 
++    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
++        super.onSizeChanged(w, h, oldw, oldh)
++        if (h > 0 && ::rootHorizontal.isInitialized) post { applyResponsiveSizing() }
++    }
++
++    private fun applyResponsiveSizing() {
++        if (!::rootHorizontal.isInitialized || height <= 0) return
++        val hDp = height / density
++        val scale = ((hDp - 235f) / 165f).coerceIn(0f, 1f)
++        fun mix(a: Float, b: Float) = a + (b - a) * scale
++        fun card(view: View, weight: Float, gap: Int) {
++            (view.layoutParams as? LinearLayout.LayoutParams)?.let {
++                it.height = 0; it.weight = weight; it.bottomMargin = dp(gap); view.layoutParams = it
++            }
++        }
++        val short = hDp < 345f
++        val tiny = hDp < 285f
++        val gap = mix(3f, 6f).toInt()
++
++        rootHorizontal.setPadding(dp(mix(5f, 8f).toInt()), dp(mix(3f, 6f).toInt()), dp(mix(5f, 8f).toInt()), dp(mix(3f, 6f).toInt()))
++        card(clockCard, mix(.72f, 1f), gap)
++        card(musicCard, mix(1.55f, 1.12f), gap)
++        card(weatherCard, mix(.82f, 1f), 0)
++
++        clockCard.setPadding(dp(6), dp(if (short) 2 else 6), dp(6), dp(if (short) 2 else 6))
++        clockText.setAutoSizeTextTypeUniformWithConfiguration(mix(26f,44f).toInt(), mix(36f,55f).toInt(), 1, TypedValue.COMPLEX_UNIT_SP)
++        dateText.setAutoSizeTextTypeUniformWithConfiguration(mix(9f,13f).toInt(), mix(12f,22f).toInt(), 1, TypedValue.COMPLEX_UNIT_SP)
++
++        musicCard.setPadding(dp(6), dp(if (short) 3 else 8), dp(6), dp(if (short) 3 else 8))
++        val album = mix(30f, 48f).toInt()
++        mediaAlbumArt.layoutParams = mediaAlbumArt.layoutParams.apply { width = dp(album); height = dp(album) }
++        mediaAlbumIcon.textSize = mix(16f,24f); mediaTitleText.textSize = mix(10.5f,14.5f)
++        mediaArtistText.textSize = mix(8.5f,12f); mediaArtistText.visibility = if (tiny) View.GONE else View.VISIBLE
++        (mediaProgressBar.parent as? View)?.let { v -> (v.layoutParams as? LinearLayout.LayoutParams)?.let { it.topMargin = dp(if (short) 2 else 8); it.bottomMargin = dp(if (short) 1 else 4); v.layoutParams = it } }
++        (mediaCurTimeText.parent as? View)?.visibility = if (tiny) View.GONE else View.VISIBLE
++        val ctrl = mix(30f,40f).toInt()
++        listOf(mediaShuffleBtn, mediaPrevBtn, mediaNextBtn, mediaRepeatBtn).forEach { it.layoutParams = it.layoutParams.apply { height = dp(ctrl) }; it.setPadding(dp(5),dp(5),dp(5),dp(5)) }
++        val play = mix(34f,44f).toInt(); mediaPlayPauseBtn.layoutParams = mediaPlayPauseBtn.layoutParams.apply { width = dp(play); height = dp(play) }
++        mediaPlayPauseIcon.setPadding(dp(if (short) 7 else 10),dp(if (short) 7 else 10),dp(if (short) 7 else 10),dp(if (short) 7 else 10))
++
++        weatherCard.setPadding(dp(6), dp(if (short) 3 else 8), dp(6), dp(if (short) 3 else 8))
++        weatherIconText.textSize = mix(27f,46f); weatherTempText.textSize = mix(31f,50f); weatherUnitText.textSize = mix(14f,22f)
++        weatherLocationBadge.textSize = mix(10f,17f); weatherLocationBadge.visibility = if (hDp < 255f) View.GONE else View.VISIBLE
++        weatherHumidityChip.textSize = mix(9f,13.5f); weatherWindChip.textSize = mix(9f,13.5f)
++        val chipV = dp(if (short) 2 else 4); weatherHumidityChip.setPadding(dp(4),chipV,dp(4),chipV); weatherWindChip.setPadding(dp(4),chipV,dp(4),chipV)
++
++        val header = findViewById<LinearLayout>(R.id.embeddedHeader)
++        header.layoutParams = header.layoutParams.apply { height = dp(mix(44f,65f).toInt()) }
++        val tool = mix(34f,48f).toInt()
++        listOf(app2HomeBtn, app2BackBtn, app2ReloadBtn, app2ChannelsBtn, app2FitBtn, app2FsBtn, app2SwitchBtn).forEach { it.layoutParams = it.layoutParams.apply { width = dp(tool); height = dp(tool) }; it.textSize = mix(18f,24f) }
++        val emb = mix(28f,40f).toInt(); app2EmbeddedIcon.layoutParams = app2EmbeddedIcon.layoutParams.apply { width = dp(emb); height = dp(emb) }; app2EmbeddedTitle.textSize = mix(15f,22f)
++    }
++
+     private fun updateDashboardBackground(isDay: Boolean) {
+         val bg = GradientDrawable(
+             GradientDrawable.Orientation.TL_BR,
+@@ -285,6 +339,7 @@
+         app2FitBtn = findViewById(R.id.app2FitBtn)
+         app2FsBtn = findViewById(R.id.app2FsBtn)
+         app2SwitchBtn = findViewById(R.id.app2SwitchBtn)
++        rootHorizontal.post { applyResponsiveSizing() }
+ 
+         // Keep the same behavior as the old programmatic layout.
+         // The dashboard currently shows exactly 4 cards: 3 left + player on the right.
