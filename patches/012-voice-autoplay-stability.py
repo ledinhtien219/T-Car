@@ -284,55 +284,6 @@ car = replace_once(
     "CarPresentation release flag"
 )
 
-pref_start = "    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {"
-pref_end = "    private fun "
-pref_pos = car.find(pref_start)
-if pref_pos < 0:
-    raise RuntimeError("CarPresentation preference callback not found")
-next_private = car.find(pref_end, pref_pos + len(pref_start))
-if next_private < 0:
-    raise RuntimeError("CarPresentation preference callback end not found")
-pref_replacement = r'''    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        mainHandler.post {
-            if (presentationResourcesReleased) return@post
-            try {
-                if (key == SettingsActivity.KEY_DESKTOP_MODE) {
-                    applyDesktopMode(web)
-                    val isDesktop = prefs.getBoolean(SettingsActivity.KEY_DESKTOP_MODE, false)
-                    val currentUrl = web.url ?: ""
-                    val targetUrl = if (isDesktop) {
-                        if (currentUrl.contains("m.youtube.com")) currentUrl.replace("m.youtube.com", "www.youtube.com") else "https://www.youtube.com"
-                    } else {
-                        if (currentUrl.contains("www.youtube.com")) currentUrl.replace("www.youtube.com", "m.youtube.com") else "https://m.youtube.com"
-                    }
-                    web.loadUrl(targetUrl)
-                }
-
-                if (key == SettingsActivity.KEY_AUTO_DETECT_SCREEN) {
-                    refreshScreenProfile(persist = true)
-                    lastAppliedScale = -1
-                    applyWebScaleForUrl(web.url)
-                    YouTubePlayerHelper.inject(
-                        web, isUltrawide, isPortrait, carWidth, carHeight, carDpi,
-                        phoneDpi.toInt(), aspectRatio
-                    )
-                    rebuildSidebar()
-                    rebuildTopToolbar()
-                } else if (key == SettingsActivity.KEY_THEME_MODE || key == "carhud_day_mode") {
-                    applyCurrentTheme(isDayMode())
-                } else {
-                    rebuildSidebar()
-                    rebuildTopToolbar()
-                }
-            } catch (e: Exception) {
-                AppCrashHandler.logError(e, "CarPresentationPreferenceUpdate")
-            }
-        }
-    }
-
-'''
-car = car[:pref_pos] + pref_replacement + car[next_private:]
-
 onstop_marker = '''    override fun onStop() {
 '''
 release_resources = r'''    private fun releasePresentationResources() {
