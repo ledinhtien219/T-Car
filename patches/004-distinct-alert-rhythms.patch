@@ -1,0 +1,139 @@
+--- a/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarTtsManager.kt
+@@ -12,6 +12,7 @@
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import java.util.Locale
+ 
+@@ -30,6 +31,7 @@
+ 
+     private var tts: TextToSpeech? = null
+     private var toneGenerator: ToneGenerator? = null
++    private var toneSequenceJob: Job? = null
+     private var isInitialized = false
+     private var isVietnameseSupported = false
+ 
+@@ -276,27 +278,54 @@
+         if (!isPriority && now - lastToneTime < TONE_COOLDOWN_MS) return
+         lastToneTime = now
+ 
+-        try {
+-            if (toneGenerator == null) {
+-                toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
++        val ctx = appContext
++        val toneStyle = ctx?.let { WazeHudManager.getAlertToneStyle(it) }
++            ?: WazeHudManager.ALERT_TONE_BEEP
++
++        toneSequenceJob?.cancel()
++        toneSequenceJob = scope.launch {
++            try {
++                if (toneGenerator == null) {
++                    toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
++                }
++
++                suspend fun pulse(type: Int, durationMs: Int, pauseMs: Long = 0L) {
++                    toneGenerator?.startTone(type, durationMs)
++                    delay(durationMs.toLong())
++                    if (pauseMs > 0L) delay(pauseMs)
++                }
++
++                // Distinct RHYTHMS are intentional. Some Android head units map
++                // several ToneGenerator presets to nearly the same sound, so the
++                // cadence itself guarantees that all five choices are audible as
++                // different warning patterns. No audio focus is requested.
++                when (toneStyle) {
++                    WazeHudManager.ALERT_TONE_DOUBLE_BEEP -> {
++                        pulse(ToneGenerator.TONE_PROP_BEEP, 90, 80)
++                        pulse(ToneGenerator.TONE_PROP_BEEP, 90)
++                    }
++                    WazeHudManager.ALERT_TONE_ACK -> {
++                        pulse(ToneGenerator.TONE_PROP_BEEP2, 70, 55)
++                        pulse(ToneGenerator.TONE_PROP_BEEP2, 70, 55)
++                        pulse(ToneGenerator.TONE_PROP_BEEP2, 110)
++                    }
++                    WazeHudManager.ALERT_TONE_PROMPT -> {
++                        pulse(ToneGenerator.TONE_PROP_ACK, 260, 100)
++                        pulse(ToneGenerator.TONE_PROP_BEEP, 80)
++                    }
++                    WazeHudManager.ALERT_TONE_STRONG -> {
++                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 220 else 180, 70)
++                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 220 else 180, 70)
++                        pulse(ToneGenerator.TONE_PROP_NACK, if (isPriority) 360 else 300)
++                    }
++                    else -> {
++                        pulse(ToneGenerator.TONE_PROP_BEEP, if (isPriority) 150 else 110)
++                    }
++                }
++                Log.i(TAG, "Car alert tone pattern: $toneStyle")
++            } catch (e: Exception) {
++                Log.e(TAG, "Alert tone failed", e)
+             }
+-            // Five built-in tones: no audio file is needed and no audio focus is
+-            // requested, so music/video playback keeps running underneath.
+-            val ctx = appContext
+-            val toneStyle = ctx?.let { WazeHudManager.getAlertToneStyle(it) }
+-                ?: WazeHudManager.ALERT_TONE_BEEP
+-            val (toneType, normalDurationMs) = when (toneStyle) {
+-                WazeHudManager.ALERT_TONE_DOUBLE_BEEP -> ToneGenerator.TONE_PROP_BEEP2 to 320
+-                WazeHudManager.ALERT_TONE_ACK -> ToneGenerator.TONE_PROP_ACK to 320
+-                WazeHudManager.ALERT_TONE_PROMPT -> ToneGenerator.TONE_PROP_PROMPT to 220
+-                WazeHudManager.ALERT_TONE_STRONG -> ToneGenerator.TONE_PROP_NACK to 420
+-                else -> ToneGenerator.TONE_PROP_BEEP to 120
+-            }
+-            val durationMs = if (isPriority) normalDurationMs + 80 else normalDurationMs
+-            toneGenerator?.startTone(toneType, durationMs)
+-            Log.i(TAG, "Car alert tone: $toneStyle")
+-        } catch (e: Exception) {
+-            Log.e(TAG, "Alert tone failed", e)
+         }
+     }
+ 
+@@ -386,6 +415,8 @@
+         try {
+             listenJob?.cancel()
+             listenJob = null
++            toneSequenceJob?.cancel()
++            toneSequenceJob = null
+             tts?.stop()
+             tts?.shutdown()
+             toneGenerator?.release()
+--- a/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt
++++ b/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt
+@@ -235,11 +235,11 @@
+     }
+ 
+     fun alertToneStyleLabel(context: Context): String = when (getAlertToneStyle(context)) {
+-        ALERT_TONE_BEEP -> "Ting ngắn"
++        ALERT_TONE_BEEP -> "Ting đơn"
+         ALERT_TONE_DOUBLE_BEEP -> "Ting đôi"
+-        ALERT_TONE_ACK -> "Bíp xác nhận"
+-        ALERT_TONE_PROMPT -> "Nhắc nhở"
+-        ALERT_TONE_STRONG -> "Cảnh báo mạnh"
++        ALERT_TONE_ACK -> "Ting ba nhanh"
++        ALERT_TONE_PROMPT -> "Dài - ngắn"
++        ALERT_TONE_STRONG -> "Cảnh báo 3 nhịp"
+         else -> "Ting ngắn"
+     }
+ 
+--- a/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
++++ b/app/src/main/java/com/carhud/aaproxy/SettingsActivity.kt
+@@ -1295,11 +1295,11 @@
+                         badgeText = "🔔 ${WazeHudManager.alertToneStyleLabel(this@SettingsActivity)}",
+                         onClick = {
+                             val labels = arrayOf(
+-                                "1. Ting ngắn — gọn, nhẹ",
+-                                "2. Ting đôi — 2 nhịp rõ hơn",
+-                                "3. Bíp xác nhận — cao, dễ nhận biết",
+-                                "4. Nhắc nhở — dài vừa",
+-                                "5. Cảnh báo mạnh — trầm, nổi bật"
++                                "1. Ting đơn — 1 nhịp ngắn",
++                                "2. Ting đôi — 2 nhịp nhanh",
++                                "3. Ting ba nhanh — 3 nhịp liên tiếp",
++                                "4. Dài - ngắn — 1 nhịp dài + 1 nhịp ngắn",
++                                "5. Cảnh báo 3 nhịp — 2 nhịp mạnh + 1 nhịp dài"
+                             )
+                             val values = arrayOf(
+                                 WazeHudManager.ALERT_TONE_BEEP,
