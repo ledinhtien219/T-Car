@@ -1,0 +1,109 @@
+--- a/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
+@@ -1437,15 +1437,20 @@
+             ?: return
+ 
+         val label = if (channelName.isNotBlank()) channelName else "Truyền hình"
++        // VoiceSearchManager already broadcast SUCCESS once. Only update the local
++        // banner here; a second global SUCCESS causes duplicate UI work.
+         updateVoiceState(VoiceSearchManager.State.SUCCESS, "📺 Đang mở $label...")
+-        CarMediaManager.notifyVoiceState(VoiceSearchManager.State.SUCCESS, "📺 Đang mở $label...")
+ 
+         val isAlreadyIptv = (currentActiveAppId == "iptv" && web.url?.contains("iptv_player.html") == true)
+         if (isAlreadyIptv) {
+             if (channelName.isNotBlank()) {
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
++                val jsName = org.json.JSONObject.quote(channelName)
++                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName($jsName); }", null)
+             }
+         } else {
++            // The IPTV page consumes #channel= after its M3U list is ready. Do not
++            // also fire 600/1500 ms retries: each retry used to destroy/recreate
++            // Hls.js and visibly hitch playback after a voice result.
+             val targetUrl = if (channelName.isNotBlank()) {
+                 "file:///android_asset/iptv_player.html#channel=" + java.net.URLEncoder.encode(channelName, "UTF-8")
+             } else {
+@@ -1453,15 +1458,6 @@
+             }
+             switchWebApp(iptvApp.copy(url = targetUrl), embedded = isDashboardShowing)
+         }
+-
+-        if (channelName.isNotBlank()) {
+-            web.postDelayed({
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
+-            }, 600L)
+-            web.postDelayed({
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
+-            }, 1500L)
+-        }
+     }
+ 
+     fun switchWebApp(app: WebAppItem, embedded: Boolean = true) {
+--- a/app/src/main/java/com/carhud/aaproxy/MainActivity.kt
++++ b/app/src/main/java/com/carhud/aaproxy/MainActivity.kt
+@@ -1271,13 +1271,15 @@
+             ?: return
+ 
+         val label = if (channelName.isNotBlank()) channelName else "Truyền hình"
++        // SUCCESS was already broadcast by VoiceSearchManager. Keep the local
++        // channel message without sending the same state through every listener again.
+         updateVoiceBanner(VoiceSearchManager.State.SUCCESS, "📺 Đang mở $label...")
+-        CarMediaManager.notifyVoiceState(VoiceSearchManager.State.SUCCESS, "📺 Đang mở $label...")
+ 
+         val isAlreadyIptv = (currentActiveAppId == "iptv" && web.url?.contains("iptv_player.html") == true)
+         if (isAlreadyIptv) {
+             if (channelName.isNotBlank()) {
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
++                val jsName = org.json.JSONObject.quote(channelName)
++                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName($jsName); }", null)
+             }
+         } else {
+             val targetUrl = if (channelName.isNotBlank()) {
+@@ -1288,15 +1290,11 @@
+             switchWebApp(iptvApp.copy(url = targetUrl))
+         }
+ 
+-        if (channelName.isNotBlank()) {
+-            web.postDelayed({
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
+-            }, 600L)
+-            web.postDelayed({
+-                web.evaluateJavascript("if (window.playChannelByName) { window.playChannelByName('$channelName'); }", null)
+-            }, 1500L)
++        if (searchOverlay.visibility == View.VISIBLE) {
++            mainHandler.postDelayed({
++                if (searchOverlay.visibility == View.VISIBLE) hideSearchOverlay()
++            }, 120L)
+         }
+-        mainHandler.postDelayed({ hideSearchOverlay() }, 600)
+     }
+ 
+     fun switchWebApp(app: WebAppItem) {
+--- a/app/src/main/assets/iptv_player.html
++++ b/app/src/main/assets/iptv_player.html
+@@ -487,6 +487,7 @@
+     let allChannels = [];
+     let activeTab = 'all';
+     let hlsInstance = null;
++    let activeStreamUrl = '';
+     const DEFAULT_URL = 'https://raw.githubusercontent.com/khanh71/All-In-One-IPTV/main/http-iptv.m3u';
+     const video = document.getElementById('videoPlayer');
+     const titleEl = document.getElementById('currentTitle');
+@@ -1063,6 +1064,17 @@
+       const url = channel.streamUrl;
+       if (!url) return;
+ 
++      // Voice routing can arrive through more than one UI surface. If the same
++      // channel is requested again, keep the existing HLS pipeline instead of
++      // destroy/recreate it. This removes the small hitch after speech results.
++      if (activeStreamUrl === url) {
++        try {
++          if (video && video.paused) video.play().catch(() => {});
++        } catch(e) {}
++        return;
++      }
++      activeStreamUrl = url;
++
+       if (video) {
+         try {
+           if (video.muted) video.muted = false;
