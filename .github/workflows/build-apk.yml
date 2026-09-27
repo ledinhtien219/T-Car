@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - source/TCAR.zip
+      - patches/**
       - .github/workflows/build-apk.yml
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
           unzip -t source/TCAR.zip
           sha256sum source/TCAR.zip
 
-      - name: Extract source and detect version
+      - name: Extract source, apply patches and detect version
         run: |
           set -euo pipefail
           rm -rf /tmp/tcar
@@ -37,6 +38,19 @@ jobs:
 
           if [ -f /tmp/tcar/gradle.properties ]; then
             sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
+          fi
+
+          if compgen -G "$GITHUB_WORKSPACE/patches/*.patch" > /dev/null; then
+            while IFS= read -r patch_file; do
+              echo "Applying patch: $patch_file"
+              patch -d /tmp/tcar -p1 --forward < "$patch_file"
+            done < <(find "$GITHUB_WORKSPACE/patches" -maxdepth 1 -type f -name '*.patch' | sort)
+          fi
+
+          if [ -f "$GITHUB_WORKSPACE/patches/version.properties" ]; then
+            source "$GITHUB_WORKSPACE/patches/version.properties"
+            sed -i -E "s/(versionCode[[:space:]]*=[[:space:]]*)[0-9]+/\1${VERSION_CODE}/" /tmp/tcar/app/build.gradle.kts
+            sed -i -E "s/(versionName[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"${VERSION_NAME}\"/" /tmp/tcar/app/build.gradle.kts
           fi
 
           VERSION_NAME="$(grep -oP 'versionName\s*=\s*"\K[^"]+' /tmp/tcar/app/build.gradle.kts | head -1 || true)"
