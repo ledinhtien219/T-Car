@@ -329,7 +329,7 @@ new_switch = '''                content.addView(
                         badgeText = screenProfileBadge,
                         onClick = {
                             val message = lastScreenInfo?.let {
-                                "Profile: ${it.profile.label}\n${it.detailText()}\nAuto nhận diện: ${if (prefs.getBoolean(KEY_AUTO_DETECT_SCREEN, true)) "BẬT" else "TẮT"}"
+                                "Profile: ${it.profile.label}\\n${it.detailText()}\\nAuto nhận diện: ${if (prefs.getBoolean(KEY_AUTO_DETECT_SCREEN, true)) "BẬT" else "TẮT"}"
                             } ?: "Chưa có dữ liệu màn hình xe. Hãy kết nối Android Auto rồi mở lại Cài đặt."
                             Toast.makeText(this@SettingsActivity, message, Toast.LENGTH_LONG).show()
                         }
