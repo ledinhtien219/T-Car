@@ -1,0 +1,166 @@
+--- a/app/src/main/java/com/carhud/aaproxy/CarMediaBrowserService.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarMediaBrowserService.kt
+@@ -13,6 +13,8 @@ import android.graphics.BitmapFactory
+ import android.graphics.Canvas
+ import android.os.Build
+ import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
+ import android.support.v4.media.MediaBrowserCompat
+ import android.support.v4.media.MediaDescriptionCompat
+ import android.support.v4.media.MediaMetadataCompat
+@@ -87,6 +89,9 @@ class CarMediaBrowserService : MediaBrowserServiceCompat() {
+                 setCallback(object : MediaSessionCompat.Callback() {
+                     private var lastClickTime = 0L
+                     private var lastClickKeyCode = -1
++                    private val steeringHandler = Handler(Looper.getMainLooper())
++                    private var pendingNextRunnable: Runnable? = null
++                    private var lastNextClickTime = 0L
+ 
+                     override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
+                         val ke = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+@@ -101,16 +106,60 @@ class CarMediaBrowserService : MediaBrowserServiceCompat() {
+                                 val prefs = getSharedPreferences(SettingsActivity.PREFS, Context.MODE_PRIVATE)
+                                 val now = System.currentTimeMillis()
+                                 val speed = prefs.getInt(SettingsActivity.KEY_STEERING_DOUBLE_CLICK_SPEED, 500).toLong()
++
++                                // NEXT is special: when double-click voice is enabled, do NOT
++                                // execute the first "next track" immediately. Hold it for the
++                                // double-click window. A second press cancels the pending skip
++                                // and opens the microphone, so we never do both actions.
++                                if (ke.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_NEXT) {
++                                    if (ke.repeatCount > 0) return true
++                                    val nextAction = prefs.getString(SettingsActivity.KEY_STEERING_NEXT_ACTION, "next")
++                                    val doubleVoice = prefs.getBoolean(SettingsActivity.KEY_STEERING_DOUBLE_CLICK_VOICE, true)
++
++                                    if (nextAction == "voice") {
++                                        pendingNextRunnable?.let(steeringHandler::removeCallbacks)
++                                        pendingNextRunnable = null
++                                        lastNextClickTime = 0L
++                                        CarMediaManager.startGlobalVoiceSearch(this@CarMediaBrowserService)
++                                        return true
++                                    }
++
++                                    if (doubleVoice) {
++                                        val pending = pendingNextRunnable
++                                        val isSecondClick = pending != null &&
++                                            lastNextClickTime > 0L &&
++                                            now - lastNextClickTime in 1 until speed
++
++                                        if (isSecondClick) {
++                                            steeringHandler.removeCallbacks(pending!!)
++                                            pendingNextRunnable = null
++                                            lastNextClickTime = 0L
++                                            CarMediaManager.startGlobalVoiceSearch(this@CarMediaBrowserService)
++                                            return true
++                                        }
++
++                                        pending?.let(steeringHandler::removeCallbacks)
++                                        lastNextClickTime = now
++                                        val singleNext = Runnable {
++                                            pendingNextRunnable = null
++                                            lastNextClickTime = 0L
++                                            CarMediaManager.playNext()
++                                        }
++                                        pendingNextRunnable = singleNext
++                                        steeringHandler.postDelayed(singleNext, speed)
++                                        return true
++                                    }
++
++                                    CarMediaManager.playNext()
++                                    return true
++                                }
++
+                                 val isSameKey = (lastClickKeyCode == ke.keyCode)
+                                 val isDoubleClick = isSameKey && (now - lastClickTime < speed)
+                                 lastClickTime = now
+                                 lastClickKeyCode = ke.keyCode
+ 
+                                 if (isDoubleClick) {
+-                                    if (ke.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_NEXT && prefs.getBoolean(SettingsActivity.KEY_STEERING_DOUBLE_CLICK_VOICE, true)) {
+-                                        CarMediaManager.startGlobalVoiceSearch(this@CarMediaBrowserService)
+-                                        return true
+-                                    }
+                                     if ((ke.keyCode == android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || ke.keyCode == android.view.KeyEvent.KEYCODE_HEADSETHOOK) && prefs.getBoolean(SettingsActivity.KEY_STEERING_DOUBLE_PLAY_VOICE, false)) {
+                                         CarMediaManager.startGlobalVoiceSearch(this@CarMediaBrowserService)
+                                         return true
+@@ -126,15 +175,6 @@ class CarMediaBrowserService : MediaBrowserServiceCompat() {
+                                             return true
+                                         }
+                                     }
+-                                    android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> {
+-                                        val action = prefs.getString(SettingsActivity.KEY_STEERING_NEXT_ACTION, "next")
+-                                        if (action == "voice") {
+-                                            CarMediaManager.startGlobalVoiceSearch(this@CarMediaBrowserService)
+-                                        } else {
+-                                            CarMediaManager.playNext()
+-                                        }
+-                                        return true
+-                                    }
+                                     android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                                         val action = prefs.getString(SettingsActivity.KEY_STEERING_PREV_ACTION, "prev")
+                                         if (action == "voice") {
+--- a/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
++++ b/app/src/main/java/com/carhud/aaproxy/CarPresentation.kt
+@@ -67,6 +67,8 @@ class CarPresentation(
+     private var isDashboardShowing = true
+     private var currentActiveAppId: String = "youtube"
+     private val mainHandler = Handler(Looper.getMainLooper())
++    private var pendingSteeringNextRunnable: Runnable? = null
++    private var lastSteeringNextClickAt = 0L
+ 
+     // Prevent repeated play/resume commands when Android Auto recreates the surface
+     // or YouTube briefly reports a paused/buffering state.
+@@ -2867,6 +2869,52 @@ class CarPresentation(
+                     return true
+                 }
+                 KeyEvent.KEYCODE_MEDIA_NEXT -> {
++                    // Mirror MediaSession steering behavior here because some head
++                    // units deliver media keys directly to the Presentation window.
++                    // A single NEXT is delayed just long enough to know whether a
++                    // second press is coming. Double NEXT cancels the pending skip
++                    // and opens voice search, so NEXT + mic never fire together.
++                    if (event.repeatCount > 0) return true
++                    val prefs = context.getSharedPreferences(SettingsActivity.PREFS, Context.MODE_PRIVATE)
++                    val nextAction = prefs.getString(SettingsActivity.KEY_STEERING_NEXT_ACTION, "next")
++                    val doubleVoice = prefs.getBoolean(SettingsActivity.KEY_STEERING_DOUBLE_CLICK_VOICE, true)
++                    val speed = prefs.getInt(SettingsActivity.KEY_STEERING_DOUBLE_CLICK_SPEED, 500).toLong()
++
++                    if (nextAction == "voice") {
++                        pendingSteeringNextRunnable?.let(mainHandler::removeCallbacks)
++                        pendingSteeringNextRunnable = null
++                        lastSteeringNextClickAt = 0L
++                        startVoiceSearch()
++                        return true
++                    }
++
++                    if (doubleVoice) {
++                        val now = SystemClock.uptimeMillis()
++                        val pending = pendingSteeringNextRunnable
++                        val isSecondClick = pending != null &&
++                            lastSteeringNextClickAt > 0L &&
++                            now - lastSteeringNextClickAt in 1 until speed
++
++                        if (isSecondClick) {
++                            mainHandler.removeCallbacks(pending!!)
++                            pendingSteeringNextRunnable = null
++                            lastSteeringNextClickAt = 0L
++                            startVoiceSearch()
++                            return true
++                        }
++
++                        pending?.let(mainHandler::removeCallbacks)
++                        lastSteeringNextClickAt = now
++                        val singleNext = Runnable {
++                            pendingSteeringNextRunnable = null
++                            lastSteeringNextClickAt = 0L
++                            CarMediaManager.playNext()
++                        }
++                        pendingSteeringNextRunnable = singleNext
++                        mainHandler.postDelayed(singleNext, speed)
++                        return true
++                    }
++
+                     CarMediaManager.playNext()
+                     return true
+                 }
