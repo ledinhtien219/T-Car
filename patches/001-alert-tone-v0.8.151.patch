@@ -1,16 +1,3 @@
---- tcar_base/app/build.gradle.kts	1980-01-01 00:00:00.000000000 +0000
-+++ tcar_work/app/build.gradle.kts	2026-09-27 02:47:57.214824911 +0000
-@@ -12,8 +12,8 @@
-         applicationId = "com.carhud.app"
-         minSdk = 29
-         targetSdk = 35
--        versionCode = 176
--        versionName = "0.8.150"
-+        versionCode = 177
-+        versionName = "0.8.151"
- 
-         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-     }
 --- tcar_base/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt	1980-01-01 00:00:00.000000000 +0000
 +++ tcar_work/app/src/main/java/com/carhud/aaproxy/WazeHudManager.kt	2026-09-27 02:46:05.075924978 +0000
 @@ -23,7 +23,13 @@
