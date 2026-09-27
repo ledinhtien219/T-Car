@@ -23,6 +23,14 @@ def replace_between(text: str, start_marker: str, end_marker: str, replacement: 
 yt_path = ROOT / "app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt"
 yt = yt_path.read_text(encoding="utf-8")
 
+if "import android.util.Log\\n" not in yt:
+    yt = replace_once(
+        yt,
+        "import android.view.View\\n",
+        "import android.view.View\\nimport android.util.Log\\n",
+        "YouTubePlayerHelper Log import"
+    )
+
 old_auto_block = r'''        if (window.location.pathname.indexOf('/results') === 0 && window.sessionStorage.getItem('carhud_auto_play') === 'true') {
             var attempts = 0;
             var intv = setInterval(function() {
