@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify source ZIP
         run: |
@@ -76,6 +78,67 @@ jobs:
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+
+      - name: Guard version monotonicity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          CURRENT_CODE="$VERSION_CODE"
+          CURRENT_NAME="$VERSION_NAME"
+          CURRENT_PATCH="$(printf '%s' "$CURRENT_NAME" | awk -F. '{print $3}')"
+
+          [[ "$CURRENT_CODE" =~ ^[0-9]+$ ]]
+          [[ "$CURRENT_PATCH" =~ ^[0-9]+$ ]]
+
+          HIST_MAX_CODE=0
+          HIST_MAX_PATCH=0
+
+          while IFS= read -r commit; do
+            content="$(git show "$commit:patches/version.properties" 2>/dev/null || true)"
+            code="$(printf '%s\n' "$content" | sed -n 's/^VERSION_CODE=//p' | head -1)"
+            name="$(printf '%s\n' "$content" | sed -n 's/^VERSION_NAME=//p' | head -1)"
+            patch="$(printf '%s' "$name" | awk -F. '{print $3}')"
+
+            if [[ "$code" =~ ^[0-9]+$ ]] && (( code > HIST_MAX_CODE )); then
+              HIST_MAX_CODE="$code"
+            fi
+            if [[ "$patch" =~ ^[0-9]+$ ]] && (( patch > HIST_MAX_PATCH )); then
+              HIST_MAX_PATCH="$patch"
+            fi
+          done < <(git rev-list --all -- patches/version.properties)
+
+          RELEASE_NAMES="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].name' 2>/dev/null || true)"
+          RELEASE_MAX_CODE="$(printf '%s\n' "$RELEASE_NAMES" | grep -oE 'code [0-9]+' | awk '{print $2}' | sort -nr | head -1 || true)"
+          RELEASE_MAX_PATCH="$(printf '%s\n' "$RELEASE_NAMES" | grep -oE 'v0\.8\.[0-9]+' | awk -F. '{print $3}' | sort -nr | head -1 || true)"
+
+          RELEASE_MAX_CODE="${RELEASE_MAX_CODE:-0}"
+          RELEASE_MAX_PATCH="${RELEASE_MAX_PATCH:-0}"
+
+          echo "Current: v$CURRENT_NAME / code $CURRENT_CODE"
+          echo "Highest ever committed: patch $HIST_MAX_PATCH / code $HIST_MAX_CODE"
+          echo "Highest released: patch $RELEASE_MAX_PATCH / code $RELEASE_MAX_CODE"
+
+          if (( CURRENT_CODE < HIST_MAX_CODE )); then
+            echo "::error::VERSION_CODE regressed: $CURRENT_CODE < historical $HIST_MAX_CODE"
+            exit 1
+          fi
+
+          if (( CURRENT_PATCH < HIST_MAX_PATCH )); then
+            echo "::error::VERSION_NAME regressed: 0.8.$CURRENT_PATCH < historical 0.8.$HIST_MAX_PATCH"
+            exit 1
+          fi
+
+          if (( CURRENT_CODE <= RELEASE_MAX_CODE )); then
+            echo "::error::VERSION_CODE must be greater than every released build: $CURRENT_CODE <= $RELEASE_MAX_CODE"
+            exit 1
+          fi
+
+          if (( CURRENT_PATCH <= RELEASE_MAX_PATCH )); then
+            echo "::error::VERSION_NAME must be greater than every released build: 0.8.$CURRENT_PATCH <= 0.8.$RELEASE_MAX_PATCH"
+            exit 1
+          fi
 
       - uses: actions/setup-java@v5
         with:
