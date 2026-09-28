@@ -8,7 +8,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 # ---------------------------------------------------------------------------
-# 1) Dashboard artwork: TV/channel logos must never be center-cropped.
+# 1) Dashboard artwork: keep IPTV/channel logos fully visible.
 # ---------------------------------------------------------------------------
 layout_path = ROOT / "app/src/main/res/layout/dashboard.xml"
 layout = layout_path.read_text(encoding="utf-8")
@@ -37,8 +37,6 @@ new_image = '''                    <ImageView
 layout = replace_once(layout, old_image, new_image, "dashboard media artwork ImageView")
 layout_path.write_text(layout, encoding="utf-8")
 
-# Keep YouTube thumbnails visually full-bleed, but fit IPTV/channel logos
-# completely inside the square artwork box.
 dashboard_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarDashboardView.kt"
 dashboard = dashboard_path.read_text(encoding="utf-8")
 
@@ -73,8 +71,7 @@ dashboard = replace_once(dashboard, old_art, new_art, "dashboard artwork renderi
 dashboard_path.write_text(dashboard, encoding="utf-8")
 
 # ---------------------------------------------------------------------------
-# 2) YouTube search field: newer YouTube DOM variants were escaping the old
-# click selector. Capture pointer/touch/mouse/focus and open T-Car keyboard.
+# 2) Catch YouTube's changing search DOM and route search input to T-Car.
 # ---------------------------------------------------------------------------
 yt_path = ROOT / "app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt"
 yt = yt_path.read_text(encoding="utf-8")
@@ -166,6 +163,12 @@ new_search_hook = '''        function carhudClosestElement(target) {
                 var target = e && e.target;
                 if (!target || carhudIsMicTarget(target) || !carhudIsSearchTarget(target)) return false;
 
+                var bridgeAvailable = !!(window.AndroidVoice && window.AndroidVoice.openSearchKeyboard);
+                if (!bridgeAvailable) {
+                    // Never dead-lock the real YouTube field if the native bridge is unavailable.
+                    return false;
+                }
+
                 if (e) {
                     if (e.cancelable) e.preventDefault();
                     e.stopPropagation();
@@ -180,9 +183,7 @@ new_search_hook = '''        function carhudClosestElement(target) {
                 var now = Date.now();
                 if (now - __carhudSearchBridgeAt > 350) {
                     __carhudSearchBridgeAt = now;
-                    if (window.AndroidVoice && window.AndroidVoice.openSearchKeyboard) {
-                        window.AndroidVoice.openSearchKeyboard();
-                    }
+                    window.AndroidVoice.openSearchKeyboard();
                 }
                 return true;
             } catch(err) {
@@ -190,8 +191,6 @@ new_search_hook = '''        function carhudClosestElement(target) {
             }
         }
 
-        // YouTube changes the search control frequently. Capture the earliest
-        // pointer/touch/mouse event so its own SPA handler cannot swallow it.
         ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(function(eventName) {
             document.addEventListener(eventName, function(e) {
                 if (eventName === 'click' && carhudIsMicTarget(e.target)) {
@@ -215,12 +214,28 @@ yt = replace_once(yt, old_search_hook, new_search_hook, "YouTube search bridge")
 yt_path.write_text(yt, encoding="utf-8")
 
 # ---------------------------------------------------------------------------
-# 3) In-car search overlay: guarantee focus and IME Search/Enter submission.
-# The custom T-Car keyboard remains visible even when Android Auto suppresses
-# the platform IME. Submission always navigates directly to search results.
+# 3) CAR SEARCH: do NOT try to show Android IME on the Presentation/virtual
+# display. Android Auto/HUR owns the keyboard. Route all car search entry
+# points to SearchTemplate, which reliably opens the host keyboard.
 # ---------------------------------------------------------------------------
 presentation_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarPresentation.kt"
 presentation = presentation_path.read_text(encoding="utf-8")
+
+old_bridge = '''            @JavascriptInterface
+            fun openSearchKeyboard() {
+                mainHandler.post {
+                    showSearchOverlay()
+                }
+            }'''
+
+new_bridge = '''            @JavascriptInterface
+            fun openSearchKeyboard() {
+                mainHandler.post {
+                    CarMediaManager.requestCarNativeSearch("")
+                }
+            }'''
+
+presentation = replace_once(presentation, old_bridge, new_bridge, "car YouTube search JS bridge")
 
 old_show = '''    fun showSearchOverlay() {
         searchOverlay.visibility = View.VISIBLE
@@ -236,90 +251,65 @@ old_show = '''    fun showSearchOverlay() {
     }'''
 
 new_show = '''    fun showSearchOverlay() {
-        searchOverlay.visibility = View.VISIBLE
-        searchOverlay.bringToFront()
-
-        // Clean UI: hide all background chrome & widgets so screen is 100% focused on keyboard
-        hudOverlay?.visibility = View.GONE
-        sidebarContainer?.visibility = View.GONE
-        topToolbarContainer?.visibility = View.GONE
-
-        searchInput.post {
-            searchInput.requestFocus()
-            searchInput.setSelection(searchInput.text?.length ?: 0)
-            try {
-                val displayCtx = context.createDisplayContext(display)
-                val imm = displayCtx.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    ?: context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                imm?.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT)
-            } catch (_: Exception) {}
-        }
-        CarMediaManager.requestSearch(searchInput.text.toString())
+        // Search input on Android Auto must be owned by the host. EditText/IME on
+        // the secondary Presentation display can receive focus but cannot reliably
+        // receive keyboard input. SearchTemplate fixes that at the platform level.
+        val initial = if (::searchInput.isInitialized) searchInput.text?.toString().orEmpty() else ""
+        CarMediaManager.requestCarNativeSearch(initial)
     }'''
 
-presentation = replace_once(presentation, old_show, new_show, "car search overlay focus")
-
-# Make hardware/system keyboard Search/Enter perform the same immediate result
-# navigation as the large T-Car search key. Avoid duplicating listeners if the
-# source already gained them in a future source ZIP.
-input_anchor = '''                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                imeOptions = EditorInfo.IME_ACTION_SEARCH
-'''
-if input_anchor in presentation and "executeSearch(searchInput.text.toString())" in presentation:
-    listener = input_anchor + '''                setOnEditorActionListener { _, actionId, event ->
-                    val submit = actionId == EditorInfo.IME_ACTION_SEARCH ||
-                        actionId == EditorInfo.IME_ACTION_DONE ||
-                        (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
-                    if (submit) {
-                        executeSearch(text.toString())
-                        true
-                    } else {
-                        false
-                    }
-                }
-'''
-    # Only add if this exact input block does not already have an editor listener.
-    probe_at = presentation.find(input_anchor)
-    probe = presentation[probe_at:probe_at + 1400] if probe_at >= 0 else ""
-    if "setOnEditorActionListener" not in probe:
-        presentation = replace_once(presentation, input_anchor, listener, "car search editor action")
-
+presentation = replace_once(presentation, old_show, new_show, "car search overlay routing")
 presentation_path.write_text(presentation, encoding="utf-8")
 
-# Contract checks: fail immediately if a future source breaks the fixes.
+# ---------------------------------------------------------------------------
+# 4) Native Android Auto SearchTemplate: submit must immediately load the
+# YouTube results page before returning to the T-Car surface.
+# ---------------------------------------------------------------------------
+native_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarSearchScreen.kt"
+native = native_path.read_text(encoding="utf-8")
+
+old_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
+                if (searchTerm.isNotBlank()) {
+                    CarMediaManager.submitSearchQuery(searchTerm)
+                    screenManager.pop()
+                }
+            }'''
+
+new_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
+                val query = searchTerm.trim()
+                if (query.isNotEmpty()) {
+                    // Navigate directly; do not wait for an overlay listener.
+                    // Text search intentionally shows result list and does not autoplay.
+                    CarMediaManager.updateSearchText(query)
+                    CarMediaManager.search(query)
+                    screenManager.pop()
+                }
+            }'''
+
+native = replace_once(native, old_submit, new_submit, "native Android Auto search submit")
+native_path.write_text(native, encoding="utf-8")
+
+# ---------------------------------------------------------------------------
+# Contract checks.
+# ---------------------------------------------------------------------------
 final_layout = layout_path.read_text(encoding="utf-8")
 final_dash = dashboard_path.read_text(encoding="utf-8")
 final_yt = yt_path.read_text(encoding="utf-8")
 final_pres = presentation_path.read_text(encoding="utf-8")
+final_native = native_path.read_text(encoding="utf-8")
 
 checks = [
     ("TV logo fitCenter", 'android:scaleType="fitCenter"' in final_layout),
     ("dynamic artwork scaling", "youtubeArtwork" in final_dash and "ImageView.ScaleType.FIT_CENTER" in final_dash),
-    ("new YouTube search target detector", "carhudIsSearchTarget" in final_yt),
-    ("pointer search bridge", "'pointerdown', 'touchstart', 'mousedown', 'click'" in final_yt),
-    ("direct keyboard bridge", "window.AndroidVoice.openSearchKeyboard()" in final_yt),
-    ("search overlay IME focus", "imm?.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT)" in final_pres),
-    ("direct result search", "YouTubePlayerHelper.search(web, q)" in final_pres),
+    ("YouTube search detector", "carhudIsSearchTarget" in final_yt),
+    ("search fallback safety", "bridgeAvailable" in final_yt),
+    ("car bridge uses native AA search", 'CarMediaManager.requestCarNativeSearch("")' in final_pres),
+    ("car search no longer relies on IME overlay", "SearchTemplate fixes that at the platform level" in final_pres),
+    ("native keyboard defaults open", ".setShowKeyboardByDefault(true)" in final_native),
+    ("native submit loads results directly", "CarMediaManager.search(query)" in final_native),
 ]
 for label, ok in checks:
     if not ok:
         raise RuntimeError(f"Fix verification failed: {label}")
 
-print("Fixed dashboard channel artwork + robust YouTube keyboard search")
-
-
-
-
-# Temporary inspection of native Android Auto search path.
-for _rel, _needles in [
-    ("app/src/main/java/com/carhud/aaproxy/CarSearchScreen.kt", ["class CarSearchScreen", "SearchTemplate", "onSearchTextChanged", "onSearchSubmitted"]),
-    ("app/src/main/java/com/carhud/aaproxy/CarHudAutoScreen.kt", ["registerCarNativeSearchListener", "requestCarNativeSearch", "CarSearchScreen", "push"]),
-    ("app/src/main/java/com/carhud/aaproxy/CarHudAutoService.kt", ["CarSearchScreen", "onCreateScreen"]),
-]:
-    _p = ROOT / _rel
-    _s2 = _p.read_text(encoding="utf-8", errors="replace")
-    print("\n===== NATIVE SEARCH FILE", _rel, "=====")
-    for _n in _needles:
-        _i2 = _s2.find(_n)
-        print("\n---", _n, "---")
-        print(_s2[max(0,_i2-2200):min(len(_s2),_i2+6500)] if _i2 >= 0 else "MISSING")
+print("Fixed search input with Android Auto native keyboard + immediate YouTube results")
