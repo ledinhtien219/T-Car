@@ -261,9 +261,81 @@ new_show = '''    fun showSearchOverlay() {
 presentation = replace_once(presentation, old_show, new_show, "car search overlay routing")
 presentation_path.write_text(presentation, encoding="utf-8")
 
+
+manager_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarMediaManager.kt"
+manager = manager_path.read_text(encoding="utf-8")
+manager = replace_once(
+    manager,
+    '''    private val carNativeSearchListeners = java.util.concurrent.CopyOnWriteArraySet<(String) -> Unit>()''',
+    '''    private val carNativeSearchListeners = java.util.concurrent.CopyOnWriteArraySet<(String) -> Unit>()
+    @Volatile private var pendingCarSearchQuery: String? = null
+
+    fun queuePendingCarSearch(query: String) {
+        val q = query.trim()
+        if (q.isNotEmpty()) {
+            pendingCarSearchQuery = q
+        }
+    }
+
+    fun peekPendingCarSearch(): String? = pendingCarSearchQuery
+
+    fun consumePendingCarSearch(): String? {
+        val q = pendingCarSearchQuery
+        pendingCarSearchQuery = null
+        return q
+    }''',
+    "pending car search queue"
+)
+
+# Do not auto-play the first result for typed search. Voice search already has
+# its own carhud_autoplay=1 retry logic in YouTubePlayerHelper.searchAndPlay().
+old_results_autoplay = '''                    if (url.contains("watch")) {
+                        if (userWantsPlayback || autoResume) {
+                            userWantsPlayback = true
+                            ensureAudioFocus()
+                            acquireWakeLock(appCtx)
+                            view.postDelayed({
+                                if (!isPlaying) {
+                                    YouTubePlayerHelper.resumePlayback(view)
+                                }
+                            }, 500L)
+                        }
+                    } else if (userWantsPlayback || autoResume) {
+                        ensureAudioFocus()
+                        view.postDelayed({
+                            if (!isPlaying) {
+                                YouTubePlayerHelper.playFirstAvailableVideo(view)
+                            }
+                        }, 500L)
+                    }'''
+new_results_autoplay = '''                    if (url.contains("watch")) {
+                        if (userWantsPlayback || autoResume) {
+                            userWantsPlayback = true
+                            ensureAudioFocus()
+                            acquireWakeLock(appCtx)
+                            view.postDelayed({
+                                if (!isPlaying) {
+                                    YouTubePlayerHelper.resumePlayback(view)
+                                }
+                            }, 500L)
+                        }
+                    } else if (url.contains("/results")) {
+                        // Typed search must remain on the result list.
+                        // Voice autoplay is handled separately by searchAndPlay().
+                    } else if (userWantsPlayback || autoResume) {
+                        ensureAudioFocus()
+                        view.postDelayed({
+                            if (!isPlaying) {
+                                YouTubePlayerHelper.playFirstAvailableVideo(view)
+                            }
+                        }, 500L)
+                    }'''
+manager = replace_once(manager, old_results_autoplay, new_results_autoplay, "typed search no-autoplay")
+manager_path.write_text(manager, encoding="utf-8")
+
 # ---------------------------------------------------------------------------
-# 4) Native Android Auto SearchTemplate: submit must immediately load the
-# YouTube results page before returning to the T-Car surface.
+# 4) Native Android Auto SearchTemplate: queue the query until the projection
+# surface/WebView is reattached, then show YouTube results.
 # ---------------------------------------------------------------------------
 native_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarSearchScreen.kt"
 native = native_path.read_text(encoding="utf-8")
@@ -278,19 +350,43 @@ old_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
 new_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
                 val query = searchTerm.trim()
                 if (query.isNotEmpty()) {
-                    // SearchTemplate runs on the Car App screen, while YouTube is
-                    // rendered by the persistent WebView on the projection surface.
-                    // Send the query to that exact WebView before closing the template.
-                    val carWeb = CarMediaManager.getPersistentCarWebView(carContext)
-                    YouTubePlayerHelper.search(carWeb, query)
+                    // SearchTemplate temporarily replaces the projection surface.
+                    // Queue the query first; CarHudAutoScreen applies it only after
+                    // the T-Car surface/WebView has been reattached.
+                    CarMediaManager.queuePendingCarSearch(query)
                     CarMediaManager.updateSearchText(query)
-                    CarMediaManager.submitSearchQuery(query)
                     screenManager.pop()
                 }
             }'''
 
 native = replace_once(native, old_submit, new_submit, "native Android Auto search submit")
 native_path.write_text(native, encoding="utf-8")
+
+
+# Apply a queued typed-search only after the projection surface and persistent
+# WebView are back. This prevents CarPresentation recreation from resetting
+# YouTube to Home after SearchTemplate closes.
+screen_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarHudAutoScreen.kt"
+screen = screen_path.read_text(encoding="utf-8")
+old_surface_ready = '''            val pres = CarPresentation(carContext, vd.display, persistentWeb)
+            pres.show()
+            presentation = pres
+
+            CarMediaManager.setCarConnectionState(true)'''
+new_surface_ready = '''            val pres = CarPresentation(carContext, vd.display, persistentWeb)
+            pres.show()
+            presentation = pres
+
+            CarMediaManager.setCarConnectionState(true)
+
+            val pendingSearch = CarMediaManager.consumePendingCarSearch()
+            if (!pendingSearch.isNullOrBlank()) {
+                persistentWeb.postDelayed({
+                    YouTubePlayerHelper.search(persistentWeb, pendingSearch)
+                }, 250L)
+            }'''
+screen = replace_once(screen, old_surface_ready, new_surface_ready, "apply pending search after surface restore")
+screen_path.write_text(screen, encoding="utf-8")
 
 # ---------------------------------------------------------------------------
 # Contract checks.
@@ -300,6 +396,8 @@ final_dash = dashboard_path.read_text(encoding="utf-8")
 final_yt = yt_path.read_text(encoding="utf-8")
 final_pres = presentation_path.read_text(encoding="utf-8")
 final_native = native_path.read_text(encoding="utf-8")
+final_manager = manager_path.read_text(encoding="utf-8")
+final_screen = screen_path.read_text(encoding="utf-8")
 
 checks = [
     ("TV logo fitCenter", 'android:scaleType="fitCenter"' in final_layout),
@@ -309,7 +407,10 @@ checks = [
     ("car bridge uses native AA search", 'CarMediaManager.requestCarNativeSearch("")' in final_pres),
     ("car search no longer relies on IME overlay", "SearchTemplate fixes that at the platform level" in final_pres),
     ("native keyboard defaults open", ".setShowKeyboardByDefault(true)" in final_native),
-    ("native submit loads results directly", "YouTubePlayerHelper.search(carWeb, query)" in final_native),
+    ("native submit queues result navigation", "CarMediaManager.queuePendingCarSearch(query)" in final_native),
+    ("pending query storage", "pendingCarSearchQuery" in final_manager),
+    ("typed results stay on list", 'url.contains("/results")' in final_manager),
+    ("pending search applied after surface restore", "consumePendingCarSearch()" in final_screen and "YouTubePlayerHelper.search(persistentWeb, pendingSearch)" in final_screen),
 ]
 for label, ok in checks:
     if not ok:
@@ -318,28 +419,3 @@ for label, ok in checks:
 print("Fixed search input with Android Auto native keyboard + immediate YouTube results")
 
 
-
-# TEMP SEARCH DEBUG
-for _rel, _needles in [
-    ("app/src/main/java/com/carhud/aaproxy/CarPresentation.kt", [
-        "class CarPresentation", "init {", "switchWebApp(", "currentActiveAppId",
-        "web.loadUrl(", "DEFAULT_APPS", "youtube", "attach", "addView(web"
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/CarMediaManager.kt", [
-        "currentLoadingUrl", "loadUrl(", "lastPlayedUrl", "isWebShowingFullscreen"
-    ]),
-]:
-    _p = ROOT / _rel
-    _s = _p.read_text(encoding="utf-8", errors="replace")
-    print("\n===== TEMP SEARCH DEBUG FILE", _rel, "=====")
-    for _n in _needles:
-        _start = 0
-        _count = 0
-        while True:
-            _i = _s.find(_n, _start)
-            if _i < 0 or _count >= 10:
-                break
-            _count += 1
-            print("\n---", _n, "#", _count, "---")
-            print(_s[max(0,_i-2600):min(len(_s),_i+7000)])
-            _start = _i + len(_n)
