@@ -1,0 +1,90 @@
+name: Build T-Car Media APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - source/TCAR.zip
+      - patches/**
+      - .github/workflows/build-media-apk.yml
+
+jobs:
+  build-media:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract source and apply patches
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tcar
+          mkdir -p /tmp/tcar
+          unzip -q source/TCAR.zip -d /tmp/tcar
+          chmod -R u+rwX /tmp/tcar
+
+          if [ -f /tmp/tcar/gradle.properties ]; then
+            sed -i '/^org\.gradle\.java\.home=/d' /tmp/tcar/gradle.properties
+          fi
+
+          find /tmp/tcar/app/src/main/java -type f -name '*.kt' -exec sed -i 's/\r$//' {} +
+
+          if compgen -G "$GITHUB_WORKSPACE/patches/*.patch" > /dev/null; then
+            while IFS= read -r patch_file; do
+              patch -d /tmp/tcar -p1 --forward < "$patch_file"
+            done < <(find "$GITHUB_WORKSPACE/patches" -maxdepth 1 -type f -name '*.patch' | sort)
+          fi
+
+          if compgen -G "$GITHUB_WORKSPACE/patches/*.py" > /dev/null; then
+            while IFS= read -r transform_script; do
+              python3 "$transform_script"
+            done < <(find "$GITHUB_WORKSPACE/patches" -maxdepth 1 -type f -name '*.py' | sort)
+          fi
+
+          source "$GITHUB_WORKSPACE/patches/version.properties"
+          sed -i -E "s/(versionCode[[:space:]]*=[[:space:]]*)[0-9]+/\1${VERSION_CODE}/" /tmp/tcar/mediaapp/build.gradle.kts
+          sed -i -E "s/(versionName[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"${VERSION_NAME}\"/" /tmp/tcar/mediaapp/build.gradle.kts
+
+          echo "TCAR_PROJECT=/tmp/tcar" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "MEDIA_APK_NAME=T-Car-Media_v${VERSION_NAME}_code${VERSION_CODE}.apk" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Prepare Android SDK
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.5"
+
+      - name: Build T-Car Media
+        run: gradle -p "$TCAR_PROJECT" :mediaapp:assembleRelease --stacktrace
+
+      - name: Collect APK
+        run: |
+          set -euo pipefail
+          mkdir -p built
+          apk="$(find "$TCAR_PROJECT/mediaapp/build/outputs/apk/release" -type f -name '*.apk' | head -1)"
+          test -n "$apk"
+          cp "$apk" "built/$MEDIA_APK_NAME"
+          sha256sum "built/$MEDIA_APK_NAME" > "built/$MEDIA_APK_NAME.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: T-Car-Media-v${{ env.VERSION_NAME }}
+          path: |
+            built/${{ env.MEDIA_APK_NAME }}
+            built/${{ env.MEDIA_APK_NAME }}.sha256
