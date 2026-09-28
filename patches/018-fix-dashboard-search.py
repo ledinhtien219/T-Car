@@ -128,6 +128,24 @@ new_search_hook = '''        function carhudClosestElement(target) {
             );
         }
 
+        function carhudFindVideoLink(target) {
+            var el = carhudClosestElement(target);
+            if (!el || !el.closest) return null;
+
+            var direct = el.closest('a[href*="/watch?v="], a[href*="youtu.be/"]');
+            if (direct && direct.href) return direct;
+
+            var card = el.closest(
+                'ytm-video-with-context-renderer, ytm-compact-video-renderer, ' +
+                'ytm-rich-item-renderer, ytd-video-renderer, ytd-rich-item-renderer, .media-item'
+            );
+            if (card && card.querySelector) {
+                var link = card.querySelector('a[href*="/watch?v="], a[href*="youtu.be/"]');
+                if (link && link.href) return link;
+            }
+            return null;
+        }
+
         function carhudIsSearchTarget(target) {
             var el = carhudClosestElement(target);
             var depth = 0;
@@ -161,7 +179,12 @@ new_search_hook = '''        function carhudClosestElement(target) {
         function carhudOpenKeyboardFromYouTube(e) {
             try {
                 var target = e && e.target;
-                if (!target || carhudIsMicTarget(target) || !carhudIsSearchTarget(target)) return false;
+                if (!target) return false;
+
+                // A video/result tap must never reopen SearchTemplate.
+                if (Date.now() < (window.__carhudSuppressSearchUntil || 0)) return false;
+                if (carhudFindVideoLink(target)) return false;
+                if (carhudIsMicTarget(target) || !carhudIsSearchTarget(target)) return false;
 
                 var bridgeAvailable = !!(window.AndroidVoice && window.AndroidVoice.openSearchKeyboard);
                 if (!bridgeAvailable) {
@@ -191,8 +214,28 @@ new_search_hook = '''        function carhudClosestElement(target) {
             }
         }
 
+        // On result pages force a direct /watch navigation. YouTube's SPA may
+        // refocus the search control during card navigation, which used to reopen
+        // Android Auto SearchTemplate instead of opening the video.
+        document.addEventListener('click', function(e) {
+            try {
+                if (window.location.pathname.indexOf('/results') !== 0) return;
+                var videoLink = carhudFindVideoLink(e.target);
+                if (!videoLink || !videoLink.href) return;
+
+                window.__carhudSuppressSearchUntil = Date.now() + 1500;
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+                window.location.href = videoLink.href;
+            } catch(err) {}
+        }, true);
+
         ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(function(eventName) {
             document.addEventListener(eventName, function(e) {
+                // Never let result/video taps reach the search bridge.
+                if (carhudFindVideoLink(e.target)) return;
+
                 if (eventName === 'click' && carhudIsMicTarget(e.target)) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -464,6 +507,38 @@ new_surface_ready = '''            val pres = CarPresentation(carContext, vd.dis
 screen = replace_once(screen, old_surface_ready, new_surface_ready, "apply pending search after surface restore")
 screen_path.write_text(screen, encoding="utf-8")
 
+
+# ---------------------------------------------------------------------------
+# 5) Phone search must directly navigate the persistent projection WebView.
+# Do not rely solely on transient listeners that may not exist while the phone
+# activity is foregrounded.
+# ---------------------------------------------------------------------------
+phone_path = ROOT / "app/src/main/java/com/carhud/aaproxy/PhoneSearchActivity.kt"
+phone = phone_path.read_text(encoding="utf-8")
+
+old_phone_submit = '''    private fun executeSubmit() {
+        val q = searchInput.text.toString().trim()
+        if (q.isNotEmpty()) {
+            CarMediaManager.submitSearchQuery(q)
+            Toast.makeText(this, "Đang phát trên xe: $q", Toast.LENGTH_SHORT).show()
+            finish()
+        }
+    }'''
+
+new_phone_submit = '''    private fun executeSubmit() {
+        val q = searchInput.text.toString().trim()
+        if (q.isNotEmpty()) {
+            val carWeb = CarMediaManager.getPersistentCarWebView(this)
+            YouTubePlayerHelper.search(carWeb, q)
+            CarMediaManager.updateSearchText(q)
+            Toast.makeText(this, "Đang tìm trên xe: $q", Toast.LENGTH_SHORT).show()
+            finish()
+        }
+    }'''
+
+phone = replace_once(phone, old_phone_submit, new_phone_submit, "phone direct YouTube search")
+phone_path.write_text(phone, encoding="utf-8")
+
 # ---------------------------------------------------------------------------
 # Contract checks.
 # ---------------------------------------------------------------------------
@@ -474,6 +549,7 @@ final_pres = presentation_path.read_text(encoding="utf-8")
 final_native = native_path.read_text(encoding="utf-8")
 final_manager = manager_path.read_text(encoding="utf-8")
 final_screen = screen_path.read_text(encoding="utf-8")
+final_phone = phone_path.read_text(encoding="utf-8")
 
 checks = [
     ("TV logo fitCenter", 'android:scaleType="fitCenter"' in final_layout),
@@ -489,6 +565,9 @@ checks = [
     ("pending search applied after surface restore", "peekPendingCarSearch()" in final_screen and "YouTubePlayerHelper.search(persistentWeb, pendingSearch)" in final_screen),
     ("search starts before template closes", "YouTubePlayerHelper.search(preloadWeb, query)" in final_native),
     ("three-column result grid", "repeat(3,minmax(0,1fr))" in final_yt),
+    ("result taps bypass search bridge", "carhudFindVideoLink" in final_yt and "__carhudSuppressSearchUntil" in final_yt),
+    ("result taps navigate directly to watch", "window.location.href = videoLink.href" in final_yt),
+    ("phone typed search navigates car WebView", "YouTubePlayerHelper.search(carWeb, q)" in final_phone),
 ]
 for label, ok in checks:
     if not ok:
@@ -499,41 +578,3 @@ print("Fixed search input with Android Auto native keyboard + immediate YouTube 
 
 
 
-
-# TEMP FULL SEARCH DEBUG
-for _rel, _needles in [
-    ("app/src/main/java/com/carhud/aaproxy/PhoneSearchActivity.kt", [
-        "class PhoneSearchActivity", "setOnEditorActionListener", "setOnClickListener",
-        "submitSearchQuery", "requestSearch", "YouTubePlayerHelper.search", "startListening", "SpeechRecognizer"
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/MainActivity.kt", [
-        "registerSearchQueryListener", "submitSearchQuery", "PhoneSearchActivity",
-        "startGlobalVoiceSearch", "searchAndPlay", "YouTubePlayerHelper.search("
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/CarMediaManager.kt", [
-        "fun search(", "fun submitSearchQuery", "fun requestSearch", "fun updateSearchText",
-        "searchQueryListeners", "voice", "SpeechRecognizer", "requestCarNativeSearch"
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt", [
-        "fun search(", "fun searchAndPlay(", "carhud_auto_play", "carhud_autoplay",
-        "window.location.pathname.indexOf('/results')", "loadUrl(targetUrl)"
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/CarPresentation.kt", [
-        "startGlobalVoiceSearch", "startListening", "onResults", "searchAndPlay",
-        "submitSearchQuery", "requestSearch", "onTrackChanged"
-    ]),
-]:
-    _p = ROOT / _rel
-    _s = _p.read_text(encoding="utf-8", errors="replace")
-    print("\n===== TEMP FULL SEARCH FILE", _rel, "=====")
-    for _n in _needles:
-        _start = 0
-        _count = 0
-        while True:
-            _i = _s.find(_n, _start)
-            if _i < 0 or _count >= 10:
-                break
-            _count += 1
-            print("\n---", _n, "#", _count, "---")
-            print(_s[max(0,_i-2600):min(len(_s),_i+8000)])
-            _start = _i + len(_n)
