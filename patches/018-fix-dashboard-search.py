@@ -316,3 +316,25 @@ for label, ok in checks:
         raise RuntimeError(f"Fix verification failed: {label}")
 
 print("Fixed search input with Android Auto native keyboard + immediate YouTube results")
+
+
+# TEMP SEARCH DEBUG
+for _rel, _needles in [
+    ("app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt", ["fun search(", "search(web", "loadUrl(", "search_query"]),
+    ("app/src/main/java/com/carhud/aaproxy/CarMediaManager.kt", ["getPersistentCarWebView", "fun search(", "submitSearchQuery", "registerSearchQuery", "updateSearchText"]),
+    ("app/src/main/java/com/carhud/aaproxy/CarHudAutoScreen.kt", ["onSurfaceDestroyed", "setupPresentation", "getPersistentCarWebView"]),
+]:
+    _p = ROOT / _rel
+    _s = _p.read_text(encoding="utf-8", errors="replace")
+    print("\n===== TEMP SEARCH DEBUG FILE", _rel, "=====")
+    for _n in _needles:
+        _start = 0
+        _count = 0
+        while True:
+            _i = _s.find(_n, _start)
+            if _i < 0 or _count >= 6:
+                break
+            _count += 1
+            print("\n---", _n, "#", _count, "---")
+            print(_s[max(0,_i-2600):min(len(_s),_i+7600)])
+            _start = _i + len(_n)
