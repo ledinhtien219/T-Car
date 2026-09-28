@@ -79,6 +79,25 @@ jobs:
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
 
+      - name: Verify Android Auto source declarations
+        run: |
+          set -euo pipefail
+          manifest="$TCAR_PROJECT/app/src/main/AndroidManifest.xml"
+          descriptor="$TCAR_PROJECT/app/src/main/res/xml/automotive_app_desc.xml"
+          service="$TCAR_PROJECT/app/src/main/java/com/carhud/aaproxy/CarMediaBrowserService.kt"
+
+          grep -F 'android:name="com.carhud.aaproxy.CarHudAutoService"' "$manifest"
+          grep -F 'android:name="androidx.car.app.category.NAVIGATION"' "$manifest"
+          grep -F 'android:name="com.carhud.aaproxy.CarMediaBrowserService"' "$manifest"
+          grep -F 'android:label="T-Car Media"' "$manifest"
+          grep -F 'android:name="android.media.browse.MediaBrowserService"' "$manifest"
+          grep -F 'android:name="com.google.android.gms.car.application"' "$manifest"
+          grep -F '<uses name="media"/>' "$descriptor"
+          grep -F '<uses name="template"/>' "$descriptor"
+          grep -F 'class CarMediaBrowserService : MediaBrowserServiceCompat()' "$service"
+          grep -F 'sessionToken = session.sessionToken' "$service"
+          grep -F 'isActive = true' "$service"
+
       - name: Guard version monotonicity
         env:
           GH_TOKEN: ${{ github.token }}
@@ -224,6 +243,29 @@ jobs:
           TCAR_KEY_ALIAS: ${{ env.TCAR_SIGNING_ALIAS }}
           TCAR_KEY_PASSWORD: ${{ env.TCAR_SIGNING_KEY_PASS }}
         run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
+
+      - name: Verify Android Auto entries in built APK
+        run: |
+          set -euo pipefail
+          apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
+          test -n "$apk"
+
+          AAPT2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -1)"
+          test -x "$AAPT2"
+
+          "$AAPT2" dump xmltree "$apk" --file AndroidManifest.xml > /tmp/tcar-manifest.txt
+          "$AAPT2" dump xmltree "$apk" --file res/xml/automotive_app_desc.xml > /tmp/tcar-auto-desc.txt
+
+          grep -F 'com.carhud.aaproxy.CarHudAutoService' /tmp/tcar-manifest.txt
+          grep -F 'androidx.car.app.category.NAVIGATION' /tmp/tcar-manifest.txt
+          grep -F 'com.carhud.aaproxy.CarMediaBrowserService' /tmp/tcar-manifest.txt
+          grep -F 'android.media.browse.MediaBrowserService' /tmp/tcar-manifest.txt
+          grep -F 'T-Car Media' /tmp/tcar-manifest.txt
+          grep -F 'com.google.android.gms.car.application' /tmp/tcar-manifest.txt
+          grep -F 'media' /tmp/tcar-auto-desc.txt
+          grep -F 'template' /tmp/tcar-auto-desc.txt
+
+          echo "Verified APK exposes both Android Auto entries: T-Car and T-Car Media"
 
       - name: Collect and verify signed APK
         if: env.TCAR_SIGNING_READY == 'true'
