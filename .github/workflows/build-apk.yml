@@ -62,6 +62,10 @@ jobs:
             source "$GITHUB_WORKSPACE/patches/version.properties"
             sed -i -E "s/(versionCode[[:space:]]*=[[:space:]]*)[0-9]+/\1${VERSION_CODE}/" /tmp/tcar/app/build.gradle.kts
             sed -i -E "s/(versionName[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"${VERSION_NAME}\"/" /tmp/tcar/app/build.gradle.kts
+            if [ -f /tmp/tcar/mediaapp/build.gradle.kts ]; then
+              sed -i -E "s/(versionCode[[:space:]]*=[[:space:]]*)[0-9]+/\1${VERSION_CODE}/" /tmp/tcar/mediaapp/build.gradle.kts
+              sed -i -E "s/(versionName[[:space:]]*=[[:space:]]*)\"[^\"]+\"/\1\"${VERSION_NAME}\"/" /tmp/tcar/mediaapp/build.gradle.kts
+            fi
           fi
 
           VERSION_NAME="$(grep -oP 'versionName\s*=\s*"\K[^"]+' /tmp/tcar/app/build.gradle.kts | head -1 || true)"
@@ -71,11 +75,13 @@ jobs:
           [ -n "$VERSION_CODE" ] || VERSION_CODE="0"
 
           APK_NAME="T-Car_v${VERSION_NAME}_code${VERSION_CODE}_build${GITHUB_RUN_NUMBER}.apk"
+          MEDIA_APK_NAME="T-Car-Media_v${VERSION_NAME}_code${VERSION_CODE}_build${GITHUB_RUN_NUMBER}.apk"
 
           echo "TCAR_PROJECT=/tmp/tcar" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
           echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+          echo "MEDIA_APK_NAME=$MEDIA_APK_NAME" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v5
         with:
@@ -160,7 +166,7 @@ jobs:
           TCAR_KEYSTORE_PASSWORD: ${{ env.TCAR_SIGNING_STORE_PASS }}
           TCAR_KEY_ALIAS: ${{ env.TCAR_SIGNING_ALIAS }}
           TCAR_KEY_PASSWORD: ${{ env.TCAR_SIGNING_KEY_PASS }}
-        run: gradle -p "$TCAR_PROJECT" :app:assembleRelease --stacktrace
+        run: gradle -p "$TCAR_PROJECT" :app:assembleRelease :mediaapp:assembleRelease --stacktrace
 
       - name: Collect and verify signed APK
         if: env.TCAR_SIGNING_READY == 'true'
@@ -168,24 +174,32 @@ jobs:
           set -euo pipefail
           mkdir -p built
           apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
+          media_apk="$(find "$TCAR_PROJECT/mediaapp/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
           test -n "$apk"
+          test -n "$media_apk"
           cp "$apk" "built/$APK_NAME"
+          cp "$media_apk" "built/$MEDIA_APK_NAME"
 
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -x "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs "built/$APK_NAME" | tee "built/$APK_NAME.cert.txt"
-          grep -Eiq "(Signer #1|V[234](\\.[0-9]+)? Signer): certificate SHA-256 digest: 3d985f9622c39195ccd6ea5c24b659061aa1e9aab6cef79cf02bab8134245d46" "built/$APK_NAME.cert.txt"
 
-          sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
+          for signed_apk in "$APK_NAME" "$MEDIA_APK_NAME"; do
+            "$APKSIGNER" verify --verbose --print-certs "built/$signed_apk" | tee "built/$signed_apk.cert.txt"
+            grep -Eiq "(Signer #1|V[234](\\.[0-9]+)? Signer): certificate SHA-256 digest: 3d985f9622c39195ccd6ea5c24b659061aa1e9aab6cef79cf02bab8134245d46" "built/$signed_apk.cert.txt"
+            sha256sum "built/$signed_apk" > "built/$signed_apk.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         if: env.TCAR_SIGNING_READY == 'true'
         with:
-          name: T-Car-v${{ env.VERSION_NAME }}-build-${{ github.run_number }}
+          name: T-Car-suite-v${{ env.VERSION_NAME }}-build-${{ github.run_number }}
           path: |
             built/${{ env.APK_NAME }}
             built/${{ env.APK_NAME }}.sha256
             built/${{ env.APK_NAME }}.cert.txt
+            built/${{ env.MEDIA_APK_NAME }}
+            built/${{ env.MEDIA_APK_NAME }}.sha256
+            built/${{ env.MEDIA_APK_NAME }}.cert.txt
 
       - name: Publish GitHub Release
         if: env.TCAR_SIGNING_READY == 'true'
@@ -194,6 +208,12 @@ jobs:
         run: |
           set -euo pipefail
           TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
-          gh release create "$TAG"             "built/$APK_NAME"             "built/$APK_NAME.sha256" \
+          gh release create "$TAG" \
+            "built/$APK_NAME" \
+            "built/$APK_NAME.sha256" \
             "built/$APK_NAME.cert.txt" \
-            --title "T-Car v$VERSION_NAME (code $VERSION_CODE) - build #$GITHUB_RUN_NUMBER"             --notes "Automatic build from commit $GITHUB_SHA"
+            "built/$MEDIA_APK_NAME" \
+            "built/$MEDIA_APK_NAME.sha256" \
+            "built/$MEDIA_APK_NAME.cert.txt" \
+            --title "T-Car v$VERSION_NAME + T-Car Media (code $VERSION_CODE) - build #$GITHUB_RUN_NUMBER" \
+            --notes "Automatic build from commit $GITHUB_SHA. Install both APKs for separate T-Car and T-Car Media entries in Android Auto."
