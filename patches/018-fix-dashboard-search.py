@@ -306,3 +306,21 @@ for label, ok in checks:
         raise RuntimeError(f"Fix verification failed: {label}")
 
 print("Fixed dashboard channel artwork + robust YouTube keyboard search")
+
+
+# Temporary inspection for search-input bug diagnosis.
+_s = presentation_path.read_text(encoding="utf-8")
+for _needle in [
+    "private fun buildSearchOverlay",
+    "searchInput = EditText",
+    "fun addChar",
+    "private fun addChar",
+    "setOnTouchListener",
+    "showSearchOverlay()",
+]:
+    _i = _s.find(_needle)
+    print("\n===== SEARCH DEBUG:", _needle, "=====")
+    if _i >= 0:
+        print(_s[max(0, _i - 2500): min(len(_s), _i + 8500)])
+    else:
+        print("MISSING")
