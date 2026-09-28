@@ -139,31 +139,3 @@ for forbidden in (
 
 print("Applied UI-only dashboard/logo + 3-column results; v0.8.164 search behavior preserved")
 
-
-# TEMP CARD5 DEBUG
-for _rel, _needles in [
-    ("app/src/main/java/com/carhud/aaproxy/YouTubePlayerHelper.kt", [
-        "carhud-force-fullscreen", "requestFullscreen", "object-fit", "movie_player",
-        "html5-video-player", "watch", "inject("
-    ]),
-    ("app/src/main/res/layout/dashboard.xml", [
-        "embeddedHeader", "embeddedWeb", "WebView", "app2", "card"
-    ]),
-    ("app/src/main/java/com/carhud/aaproxy/CarDashboardView.kt", [
-        "embeddedHeader", "app2Web", "WebView", "addView", "player"
-    ]),
-]:
-    _p = ROOT / _rel
-    _s = _p.read_text(encoding="utf-8", errors="replace")
-    print("\n===== TEMP CARD5 FILE", _rel, "=====")
-    for _n in _needles:
-        _start = 0
-        _count = 0
-        while True:
-            _i = _s.find(_n, _start)
-            if _i < 0 or _count >= 10:
-                break
-            _count += 1
-            print("\n---", _n, "#", _count, "---")
-            print(_s[max(0,_i-3000):min(len(_s),_i+10000)])
-            _start = _i + len(_n)
