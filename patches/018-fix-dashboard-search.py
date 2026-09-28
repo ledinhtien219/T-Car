@@ -308,19 +308,17 @@ for label, ok in checks:
 print("Fixed dashboard channel artwork + robust YouTube keyboard search")
 
 
-# Temporary inspection for search-input bug diagnosis.
+
+# Temporary inspection: find touch-bounce implementation and all search input flags.
+import re as _re
 _s = presentation_path.read_text(encoding="utf-8")
-for _needle in [
-    "private fun buildSearchOverlay",
-    "searchInput = EditText",
-    "fun addChar",
-    "private fun addChar",
-    "setOnTouchListener",
-    "showSearchOverlay()",
-]:
-    _i = _s.find(_needle)
-    print("\n===== SEARCH DEBUG:", _needle, "=====")
-    if _i >= 0:
-        print(_s[max(0, _i - 2500): min(len(_s), _i + 8500)])
-    else:
-        print("MISSING")
+for _m in _re.finditer(r"enableTouchBounce", _s):
+    _a = max(0, _m.start() - 1800)
+    _b = min(len(_s), _m.start() + 2800)
+    _chunk = _s[_a:_b]
+    if "fun " in _chunk or "setOnTouchListener" in _chunk:
+        print("\n===== BOUNCE DEBUG =====")
+        print(_chunk)
+print("\n===== SEARCH INPUT FLAGS =====")
+_i = _s.find("searchInput = EditText")
+print(_s[_i:_i+5000] if _i >= 0 else "MISSING")
