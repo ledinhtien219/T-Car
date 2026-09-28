@@ -56,26 +56,47 @@ yt_path.write_text(yt, encoding="utf-8")
 # ---------------------------------------------------------------------------
 car_path = ROOT / "app/src/main/java/com/carhud/aaproxy/CarPresentation.kt"
 car = car_path.read_text(encoding="utf-8")
-car_voice = '''        YouTubePlayerHelper.search(web, query)
+def replace_voice_search_call(text: str, hint: str, label: str) -> str:
+    needle = "YouTubePlayerHelper.search(web, query)"
+    positions = []
+    start = 0
+    while True:
+        pos = text.find(needle, start)
+        if pos < 0:
+            break
+        positions.append(pos)
+        start = pos + len(needle)
 
-        // dispatchSuccess() already emitted SUCCESS and broadcast it once.
-'''
-car_voice_new = '''        YouTubePlayerHelper.searchAndPlay(web, query)
+    if not positions:
+        raise RuntimeError(f"No search(web, query) call found: {label}")
 
-        // dispatchSuccess() already emitted SUCCESS and broadcast it once.
-'''
-car = replace_once(car, car_voice, car_voice_new, "CarPresentation voice search call")
+    # Prefer the occurrence inside the voice-result handler.
+    for pos in positions:
+        nearby = text[max(0, pos - 900): min(len(text), pos + 900)]
+        if hint in nearby:
+            return text[:pos] + "YouTubePlayerHelper.searchAndPlay(web, query)" + text[pos + len(needle):]
+
+    # If this file has only one query-call, it is the voice result path.
+    if len(positions) == 1:
+        pos = positions[0]
+        return text[:pos] + "YouTubePlayerHelper.searchAndPlay(web, query)" + text[pos + len(needle):]
+
+    raise RuntimeError(f"Could not identify voice search call: {label}; count={len(positions)}")
+
+car = replace_voice_search_call(
+    car,
+    "dispatchSuccess",
+    "CarPresentation voice search call"
+)
 car_path.write_text(car, encoding="utf-8")
 
 main_path = ROOT / "app/src/main/java/com/carhud/aaproxy/MainActivity.kt"
 main = main_path.read_text(encoding="utf-8")
-main_voice = '''        YouTubePlayerHelper.search(web, query)
-        if (searchOverlay.visibility == View.VISIBLE) {
-'''
-main_voice_new = '''        YouTubePlayerHelper.searchAndPlay(web, query)
-        if (searchOverlay.visibility == View.VISIBLE) {
-'''
-main = replace_once(main, main_voice, main_voice_new, "MainActivity voice search call")
+main = replace_voice_search_call(
+    main,
+    "VoiceSearchManager already emitted SUCCESS",
+    "MainActivity voice search call"
+)
 main_path.write_text(main, encoding="utf-8")
 
 print("Applied v0.8.165 split keyboard search from voice autoplay")
