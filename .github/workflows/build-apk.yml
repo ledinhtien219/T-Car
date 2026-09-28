@@ -168,20 +168,15 @@ jobs:
           set -euo pipefail
           mkdir -p built
           apk="$(find "$TCAR_PROJECT/app/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
-          media_apk="$(find "$TCAR_PROJECT/mediaapp/build/outputs/apk/release" -type f -name "*.apk" | head -1)"
           test -n "$apk"
-          test -n "$media_apk"
           cp "$apk" "built/$APK_NAME"
-          cp "$media_apk" "built/$MEDIA_APK_NAME"
 
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -x "$APKSIGNER"
 
-          for signed_apk in "$APK_NAME" "$MEDIA_APK_NAME"; do
-            "$APKSIGNER" verify --verbose --print-certs "built/$signed_apk" | tee "built/$signed_apk.cert.txt"
-            grep -Eiq "(Signer #1|V[234](\\.[0-9]+)? Signer): certificate SHA-256 digest: 3d985f9622c39195ccd6ea5c24b659061aa1e9aab6cef79cf02bab8134245d46" "built/$signed_apk.cert.txt"
-            sha256sum "built/$signed_apk" > "built/$signed_apk.sha256"
-          done
+          "$APKSIGNER" verify --verbose --print-certs "built/$APK_NAME" | tee "built/$APK_NAME.cert.txt"
+          grep -Eiq "(Signer #1|V[234](\\.[0-9]+)? Signer): certificate SHA-256 digest: 3d985f9622c39195ccd6ea5c24b659061aa1e9aab6cef79cf02bab8134245d46" "built/$APK_NAME.cert.txt"
+          sha256sum "built/$APK_NAME" > "built/$APK_NAME.sha256"
 
       - uses: actions/upload-artifact@v4
         if: env.TCAR_SIGNING_READY == 'true'
