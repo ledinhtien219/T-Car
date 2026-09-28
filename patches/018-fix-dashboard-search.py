@@ -278,10 +278,13 @@ old_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
 new_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
                 val query = searchTerm.trim()
                 if (query.isNotEmpty()) {
-                    // Navigate directly; do not wait for an overlay listener.
-                    // Text search intentionally shows result list and does not autoplay.
+                    // SearchTemplate runs on the Car App screen, while YouTube is
+                    // rendered by the persistent WebView on the projection surface.
+                    // Send the query to that exact WebView before closing the template.
+                    val carWeb = CarMediaManager.getPersistentCarWebView(carContext)
+                    YouTubePlayerHelper.search(carWeb, query)
                     CarMediaManager.updateSearchText(query)
-                    CarMediaManager.search(query)
+                    CarMediaManager.submitSearchQuery(query)
                     screenManager.pop()
                 }
             }'''
@@ -306,7 +309,7 @@ checks = [
     ("car bridge uses native AA search", 'CarMediaManager.requestCarNativeSearch("")' in final_pres),
     ("car search no longer relies on IME overlay", "SearchTemplate fixes that at the platform level" in final_pres),
     ("native keyboard defaults open", ".setShowKeyboardByDefault(true)" in final_native),
-    ("native submit loads results directly", "CarMediaManager.search(query)" in final_native),
+    ("native submit loads results directly", "YouTubePlayerHelper.search(carWeb, query)" in final_native),
 ]
 for label, ok in checks:
     if not ok:
