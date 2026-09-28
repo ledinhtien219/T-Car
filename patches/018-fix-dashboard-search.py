@@ -211,6 +211,73 @@ new_search_hook = '''        function carhudClosestElement(target) {
         }, true);'''
 
 yt = replace_once(yt, old_search_hook, new_search_hook, "YouTube search bridge")
+
+# Avoid a redundant reload when the preload and post-surface retry point to the
+# same result URL. This makes typed search feel much faster.
+old_text_search = '''                val targetUrl = "https://m.youtube.com/results?search_query=$encoded"
+                if (view.url != targetUrl) {
+                    view.loadUrl(targetUrl)
+                } else {
+                    view.reload()
+                }'''
+new_text_search = '''                val targetUrl = "https://m.youtube.com/results?search_query=$encoded"
+                if (view.url != targetUrl) {
+                    view.loadUrl(targetUrl)
+                }'''
+yt = replace_once(yt, old_text_search, new_text_search, "typed search no redundant reload")
+
+# Search results on the car display: three large touch-friendly cards per row.
+# Keep this override results-only so the YouTube home layout is unchanged.
+old_result_style = '''            // Make fallback result lists readable on wide head units. This only
+            // affects the search page and disappears automatically after navigation.
+            try {
+                var style = document.getElementById('carhud-search-results-style');
+                if (!style) {
+                    style = document.createElement('style');
+                    style.id = 'carhud-search-results-style';
+                    style.textContent = [
+                        'ytd-video-renderer{min-height:170px!important;margin-bottom:14px!important;}',
+                        'ytd-video-renderer #thumbnail{min-width:300px!important;width:300px!important;}',
+                        'ytd-video-renderer #video-title{font-size:21px!important;line-height:1.28!important;}',
+                        'ytm-video-with-context-renderer,ytm-compact-video-renderer{margin-bottom:16px!important;}',
+                        'ytm-video-with-context-renderer .media-item-headline,ytm-compact-video-renderer .media-item-headline{font-size:19px!important;line-height:1.28!important;}'
+                    ].join('');
+                    (document.head || document.documentElement).appendChild(style);
+                }
+                var vw = window.innerWidth || 0;
+                document.documentElement.style.zoom = vw >= 1200 ? '1.28' : (vw >= 850 ? '1.18' : '1.08');
+            } catch(e) {}'''
+
+new_result_style = '''            // Three-column result grid tuned for landscape Android Auto/HUR.
+            // Cards remain large enough for touch and titles stay readable.
+            try {
+                var style = document.getElementById('carhud-search-results-style');
+                if (!style) {
+                    style = document.createElement('style');
+                    style.id = 'carhud-search-results-style';
+                    style.textContent = [
+                        '.carhud-auto-screen ytm-item-section-renderer > lazy-list,.carhud-auto-screen ytm-rich-grid-renderer > .rich-grid-renderer-contents,.carhud-auto-screen ytm-section-list-renderer > lazy-list,.carhud-auto-screen .rich-grid-renderer-contents{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:10px 12px!important;padding:8px 10px 64px!important;box-sizing:border-box!important;width:100%!important;}',
+                        '.carhud-auto-screen ytm-video-with-context-renderer,.carhud-auto-screen ytm-compact-video-renderer,.carhud-auto-screen ytm-rich-item-renderer,.carhud-auto-screen .media-item{display:flex!important;flex-direction:column!important;width:100%!important;min-width:0!important;max-width:100%!important;margin:0!important;padding:0!important;box-sizing:border-box!important;}',
+                        '.carhud-auto-screen .media-item-thumbnail-container,.carhud-auto-screen ytm-thumbnail-cover,.carhud-auto-screen .video-thumbnail-container-compact{display:block!important;width:100%!important;max-width:100%!important;aspect-ratio:16/9!important;border-radius:10px!important;overflow:hidden!important;}',
+                        '.carhud-auto-screen .media-item-thumbnail-container img,.carhud-auto-screen ytm-thumbnail-cover img,.carhud-auto-screen .video-thumbnail-container-compact img{width:100%!important;height:100%!important;object-fit:cover!important;}',
+                        '.carhud-auto-screen .compact-media-item-headline,.carhud-auto-screen .media-item-headline,.carhud-auto-screen .video-title,.carhud-auto-screen h3.title{font-size:15.5px!important;line-height:1.25!important;font-weight:650!important;max-height:2.5em!important;-webkit-line-clamp:2!important;display:-webkit-box!important;-webkit-box-orient:vertical!important;overflow:hidden!important;margin:6px 2px 0!important;padding:0!important;}',
+                        '.carhud-auto-screen .compact-media-item-byline,.carhud-auto-screen .media-item-byline,.carhud-auto-screen .small-text{font-size:11.5px!important;line-height:1.2!important;margin:3px 2px 0!important;padding:0!important;}',
+                        'ytd-search ytd-item-section-renderer > #contents{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:12px!important;padding:8px 10px 64px!important;box-sizing:border-box!important;}',
+                        'ytd-search ytd-video-renderer{display:block!important;width:100%!important;min-width:0!important;margin:0!important;padding:0!important;}',
+                        'ytd-search ytd-video-renderer #dismissible{display:flex!important;flex-direction:column!important;width:100%!important;min-width:0!important;}',
+                        'ytd-search ytd-video-renderer ytd-thumbnail,ytd-search ytd-video-renderer #thumbnail{display:block!important;min-width:0!important;width:100%!important;max-width:100%!important;aspect-ratio:16/9!important;border-radius:10px!important;overflow:hidden!important;}',
+                        'ytd-search ytd-video-renderer #meta{width:100%!important;margin:0!important;padding:6px 3px 10px!important;box-sizing:border-box!important;}',
+                        'ytd-search ytd-video-renderer #video-title{font-size:16px!important;line-height:1.25!important;font-weight:650!important;max-height:2.5em!important;overflow:hidden!important;}',
+                        'ytd-search ytd-video-renderer #channel-name,ytd-search ytd-video-renderer #metadata-line{font-size:12px!important;line-height:1.2!important;}'
+                    ].join('');
+                    (document.head || document.documentElement).appendChild(style);
+                }
+                // Old zoom scaling made the result list slower and could collapse
+                // columns. Keep a stable 1:1 layout for the three-column grid.
+                document.documentElement.style.zoom = '1';
+            } catch(e) {}'''
+
+yt = replace_once(yt, old_result_style, new_result_style, "three-column search results")
 yt_path.write_text(yt, encoding="utf-8")
 
 # ---------------------------------------------------------------------------
@@ -350,10 +417,12 @@ old_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
 new_submit = '''            override fun onSearchSubmitted(searchTerm: String) {
                 val query = searchTerm.trim()
                 if (query.isNotEmpty()) {
-                    // SearchTemplate temporarily replaces the projection surface.
-                    // Queue the query first; CarHudAutoScreen applies it only after
-                    // the T-Car surface/WebView has been reattached.
+                    // Start network loading immediately while Android Auto is
+                    // dismissing SearchTemplate. The pending queue below protects
+                    // the URL if the projection surface is recreated afterwards.
                     CarMediaManager.queuePendingCarSearch(query)
+                    val preloadWeb = CarMediaManager.getPersistentCarWebView(carContext)
+                    YouTubePlayerHelper.search(preloadWeb, query)
                     CarMediaManager.updateSearchText(query)
                     screenManager.pop()
                 }
@@ -379,11 +448,18 @@ new_surface_ready = '''            val pres = CarPresentation(carContext, vd.dis
 
             CarMediaManager.setCarConnectionState(true)
 
-            val pendingSearch = CarMediaManager.consumePendingCarSearch()
+            val pendingSearch = CarMediaManager.peekPendingCarSearch()
             if (!pendingSearch.isNullOrBlank()) {
+                // Search already started before SearchTemplate closed. Re-assert
+                // the same URL quickly in case Presentation recreation reset it.
+                longArrayOf(0L, 90L, 220L).forEach { delayMs ->
+                    persistentWeb.postDelayed({
+                        YouTubePlayerHelper.search(persistentWeb, pendingSearch)
+                    }, delayMs)
+                }
                 persistentWeb.postDelayed({
-                    YouTubePlayerHelper.search(persistentWeb, pendingSearch)
-                }, 250L)
+                    CarMediaManager.consumePendingCarSearch()
+                }, 320L)
             }'''
 screen = replace_once(screen, old_surface_ready, new_surface_ready, "apply pending search after surface restore")
 screen_path.write_text(screen, encoding="utf-8")
@@ -410,7 +486,9 @@ checks = [
     ("native submit queues result navigation", "CarMediaManager.queuePendingCarSearch(query)" in final_native),
     ("pending query storage", "pendingCarSearchQuery" in final_manager),
     ("typed results stay on list", 'url.contains("/results")' in final_manager),
-    ("pending search applied after surface restore", "consumePendingCarSearch()" in final_screen and "YouTubePlayerHelper.search(persistentWeb, pendingSearch)" in final_screen),
+    ("pending search applied after surface restore", "peekPendingCarSearch()" in final_screen and "YouTubePlayerHelper.search(persistentWeb, pendingSearch)" in final_screen),
+    ("search starts before template closes", "YouTubePlayerHelper.search(preloadWeb, query)" in final_native),
+    ("three-column result grid", "repeat(3,minmax(0,1fr))" in final_yt),
 ]
 for label, ok in checks:
     if not ok:
@@ -420,13 +498,3 @@ print("Fixed search input with Android Auto native keyboard + immediate YouTube 
 
 
 
-
-# TEMP RESULT LAYOUT DEBUG
-_s = yt_path.read_text(encoding="utf-8", errors="replace")
-for _needle in ["fun inject(", "createElement('style')", "carhud-style", "ytm-video-with-context-renderer", "grid", "result"]:
-    _i = _s.find(_needle)
-    print("\n===== RESULT LAYOUT DEBUG", _needle, "=====")
-    if _i >= 0:
-        print(_s[max(0, _i-3500):min(len(_s), _i+14000)])
-    else:
-        print("MISSING")
