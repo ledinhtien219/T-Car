@@ -419,3 +419,14 @@ for label, ok in checks:
 print("Fixed search input with Android Auto native keyboard + immediate YouTube results")
 
 
+
+
+# TEMP RESULT LAYOUT DEBUG
+_s = yt_path.read_text(encoding="utf-8", errors="replace")
+for _needle in ["fun inject(", "createElement('style')", "carhud-style", "ytm-video-with-context-renderer", "grid", "result"]:
+    _i = _s.find(_needle)
+    print("\n===== RESULT LAYOUT DEBUG", _needle, "=====")
+    if _i >= 0:
+        print(_s[max(0, _i-3500):min(len(_s), _i+14000)])
+    else:
+        print("MISSING")
