@@ -309,16 +309,17 @@ print("Fixed dashboard channel artwork + robust YouTube keyboard search")
 
 
 
-# Temporary inspection: find touch-bounce implementation and all search input flags.
-import re as _re
-_s = presentation_path.read_text(encoding="utf-8")
-for _m in _re.finditer(r"enableTouchBounce", _s):
-    _a = max(0, _m.start() - 1800)
-    _b = min(len(_s), _m.start() + 2800)
-    _chunk = _s[_a:_b]
-    if "fun " in _chunk or "setOnTouchListener" in _chunk:
-        print("\n===== BOUNCE DEBUG =====")
-        print(_chunk)
-print("\n===== SEARCH INPUT FLAGS =====")
-_i = _s.find("searchInput = EditText")
-print(_s[_i:_i+5000] if _i >= 0 else "MISSING")
+
+# Temporary inspection of native Android Auto search path.
+for _rel, _needles in [
+    ("app/src/main/java/com/carhud/aaproxy/CarSearchScreen.kt", ["class CarSearchScreen", "SearchTemplate", "onSearchTextChanged", "onSearchSubmitted"]),
+    ("app/src/main/java/com/carhud/aaproxy/CarHudAutoScreen.kt", ["registerCarNativeSearchListener", "requestCarNativeSearch", "CarSearchScreen", "push"]),
+    ("app/src/main/java/com/carhud/aaproxy/CarHudAutoService.kt", ["CarSearchScreen", "onCreateScreen"]),
+]:
+    _p = ROOT / _rel
+    _s2 = _p.read_text(encoding="utf-8", errors="replace")
+    print("\n===== NATIVE SEARCH FILE", _rel, "=====")
+    for _n in _needles:
+        _i2 = _s2.find(_n)
+        print("\n---", _n, "---")
+        print(_s2[max(0,_i2-2200):min(len(_s2),_i2+6500)] if _i2 >= 0 else "MISSING")
