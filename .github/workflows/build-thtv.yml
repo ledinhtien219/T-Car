@@ -1,0 +1,32 @@
+name: Build THTV APK
+
+on:
+  push:
+    branches: [ thtv ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk dist/THTV-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: THTV-debug-apk
+          path: dist/THTV-debug.apk
+          if-no-files-found: error
